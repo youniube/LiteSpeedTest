@@ -18,20 +18,25 @@ import (
 )
 
 var (
-	port    = flag.Int("p", 8090, "set port")
-	test    = flag.String("test", "", "test from command line with subscription link or file")
-	conf    = flag.String("config", "", "command line options")
-	ping    = flag.Int("ping", 2, "retry times to ping link on startup")
-	grpc    = flag.Bool("grpc", false, "start grpc server")
-	version = flag.Bool("v", false, "show current version of clash")
+	port           = flag.Int("p", 8090, "set port")
+	test           = flag.String("test", "", "test from command line with subscription link or file")
+	conf           = flag.String("config", "", "command line options")
+	ping           = flag.Int("ping", 2, "retry times to ping link on startup")
+	grpc           = flag.Bool("grpc", false, "start grpc server")
+	version        = flag.Bool("v", false, "show current version of clash")
+	engineName     = flag.String("engine", "", "native | singbox")
+	singboxBin     = flag.String("singbox-bin", "sing-box", "path to sing-box binary")
+	singboxWorkDir = flag.String("singbox-workdir", ".lite-singbox", "sing-box temp work directory")
+	keepTemp       = flag.Bool("keep-temp", false, "keep sing-box temp files")
 )
 
 func main() {
 	flag.Parse()
 	if *version {
-		fmt.Printf("LiteSpeedTest  %s %s %s with %s %s\n", C.Version, runtime.GOOS, runtime.GOARCH, runtime.Version(), C.BuildTime)
+		fmt.Printf("LiteSpeedTest %s %s %s with %s %s\n", C.Version, runtime.GOOS, runtime.GOARCH, runtime.Version(), C.BuildTime)
 		return
 	}
+
 	link := ""
 	for _, arg := range os.Args {
 		if strings.HasPrefix(arg, "-") {
@@ -42,19 +47,21 @@ func main() {
 			break
 		}
 	}
+
 	if *test != "" {
 		if err := webServer.TestFromCMD(*test, conf); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
-	// start grpc server
+
 	if *grpc {
 		if err := grpcServer.StartServer(uint16(*port)); err != nil {
 			log.Fatalln(err)
 		}
 		return
 	}
+
 	if link == "" {
 		if len(os.Args) < 2 {
 			*port = 10888
@@ -64,16 +71,22 @@ func main() {
 		}
 		return
 	}
+
 	c := core.Config{
-		LocalHost: "0.0.0.0",
-		LocalPort: *port,
-		Link:      link,
-		Ping:      *ping,
+		LocalHost:      "0.0.0.0",
+		LocalPort:      *port,
+		Link:           link,
+		Ping:           *ping,
+		Engine:         *engineName,
+		SingboxBin:     *singboxBin,
+		SingboxWorkDir: *singboxWorkDir,
+		KeepTempFile:   *keepTemp,
 	}
 	p, err := core.StartInstance(c)
 	if err != nil {
 		log.Fatalln(err)
 	}
+
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigs)

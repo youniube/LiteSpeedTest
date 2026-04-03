@@ -1,0 +1,220 @@
+diff --git a/config/config.go b/config/config.go
+--- a/config/config.go
++++ b/config/config.go
+@@
+ 	case "vless":
+-		u, err := url.Parse(link)
+-
+-		if err != nil {
+-
+-			return nil, err
+-
+-		}
+-
+-		port, err := strconv.Atoi(u.Port())
+-
+-		if err != nil {
+-
+-			return nil, err
+-
+-		}
+-
+-		password, _ := u.User.Password()
+-
+-		cfg = &Config{
+-
+-			Protocol: "vless",
+-
+-			Remarks: u.Fragment,
+-
+-			Server: u.Host,
+-
+-			Port: port,
+-
+-			Password: password,
+-
+-		}
++		if opt, err1 := VlessLinkToVlessOption(link); err1 != nil {
++			return nil, err1
++		} else {
++			cfg = &Config{
++				Protocol: "vless",
++				Remarks:  opt.Name,
++				Server:   opt.Server,
++				Port:     opt.Port,
++				Password: opt.UUID,
++				Net:      opt.Network,
++				SNI:      firstNonEmpty(opt.SNI, opt.ServerName),
++			}
++		}
+ 	default:
+ 		return nil, common.NewError("Not Suported Link")
+ 	}
+diff --git a/config/parser.go b/config/parser.go
+--- a/config/parser.go
++++ b/config/parser.go
+@@
+ 	case "http":
+ 		httpOption := &outbound.HttpOption{}
+ 		err = decoder.Decode(mapping, httpOption)
+ 		if err != nil {
+ 			break
+ 		}
+@@
+ 		if len(httpOption.Name) > 0 {
+ 			link = fmt.Sprintf("%s#%s%s", link, namePrefix, url.QueryEscape(httpOption.Name))
+ 		}
++
++	case "vless":
++		vlessOption := &VlessOption{}
++		err = decoder.Decode(mapping, vlessOption)
++		if err != nil {
++			break
++		}
++		vlessOption.Normalize()
++		link, err = VlessOptionToLink(vlessOption, namePrefix)
+ 
+ 	default:
+ 		return "", fmt.Errorf("unsupport proxy type: %s", proxyType)
+ 	}
+diff --git a/web/profile.go b/web/profile.go
+--- a/web/profile.go
++++ b/web/profile.go
+@@
+ import (
+ 	"bufio"
+ 	"bytes"
+ 	"context"
+ 	"encoding/base64"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"io"
+ 	"io/ioutil"
+ 	"log"
++	"net"
+ 	"net/http"
+ 	"net/url"
+ 	"os"
+ 	"regexp"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+ 	"time"
+ 
+ 	"github.com/xxf098/lite-proxy/config"
+ 	"github.com/xxf098/lite-proxy/download"
++	"github.com/xxf098/lite-proxy/engine"
++	"github.com/xxf098/lite-proxy/engine/singbox"
++	proxydial "github.com/xxf098/lite-proxy/proxy"
+ 	"github.com/xxf098/lite-proxy/request"
+ 	"github.com/xxf098/lite-proxy/utils"
+ 	"github.com/xxf098/lite-proxy/web/render"
+ )
+@@
+ type ProfileTestOptions struct {
+ 	GroupName string `json:"group"`
+ 	SpeedTestMode string `json:"speedtestMode"`
+ 	PingMethod string `json:"pingMethod"`
+ 	SortMethod string `json:"sortMethod"`
+ 	Concurrency int `json:"concurrency"`
+ 	TestMode int `json:"testMode"`
+ 	TestIDs []int `json:"testids"`
+ 	Timeout time.Duration `json:"timeout"`
+ 	Links []string `json:"links"`
+ 	Subscription string `json:"subscription"`
+ 	Language string `json:"language"`
+ 	FontSize int `json:"fontSize"`
+ 	Theme string `json:"theme"`
+ 	Unique bool `json:"unique"`
+ 	GeneratePicMode int `json:"generatePicMode"`
+ 	OutputMode int `json:"outputMode"`
++	Engine string `json:"engine,omitempty"`
++	SingboxBin string `json:"singboxBin,omitempty"`
++	SingboxWorkDir string `json:"singboxWorkDir,omitempty"`
++	KeepTempFile bool `json:"keepTempFile,omitempty"`
+ }
+@@
+ type ProfileTest struct {
+ 	Writer MessageWriter
+ 	Options *ProfileTestOptions
+ 	MessageType int
+ 	Links []string
++	Runner engine.Runner
+ 	mu sync.Mutex
+ 	wg sync.WaitGroup
+ }
+@@
+ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeChan chan<- render.Node, trafficChan chan<- int64) error {
+ 	defer p.wg.Done()
+ 	if link == "" {
+ 		link = p.Links[index]
+ 		link = strings.SplitN(link, "^", 2)[0]
+ 	}
+@@
+ 	protocol := cfg.Protocol
+ 	if (cfg.Protocol == "vmess" || cfg.Protocol == "trojan") && cfg.Net != "" {
+ 		protocol = fmt.Sprintf("%s/%s", cfg.Protocol, cfg.Net)
+ 	}
+-
+-	elapse, err := p.pingLink(index, link)
++
++	useExternal := engine.NeedExternalEngine(p.Options.Engine, link)
++	var (
++		elapse int64
++		dialFn func(network, addr string) (net.Conn, error)
++		lp *engine.LocalProxy
++	)
++
++	if useExternal {
++		if p.Options.SingboxBin == "" {
++			p.Options.SingboxBin = "sing-box"
++		}
++		if p.Options.SingboxWorkDir == "" {
++			p.Options.SingboxWorkDir = ".lite-singbox"
++		}
++		if p.Runner == nil {
++			p.Runner = singbox.New(p.Options.SingboxBin, p.Options.SingboxWorkDir)
++		}
++		lp, err = p.Runner.Start(ctx, link, engine.StartOptions{
++			SingboxBin: p.Options.SingboxBin,
++			WorkDir: p.Options.SingboxWorkDir,
++			LogLevel: "warn",
++			StartupWait: 5 * time.Second,
++			KeepTempFile: p.Options.KeepTempFile,
++		})
++		if err != nil {
++			return err
++		}
++		defer lp.Close(context.Background())
++		dialFn = proxydial.NewSocks5DialFunc(lp.SOCKSAddr, p.Options.Timeout)
++		if p.Options.SpeedTestMode == SpeedOnly {
++			elapse = 0
++		} else {
++			p.WriteMessage(getMsgByte(index, "startping"))
++			elapse, err = request.PingWithDial(ctx, dialFn, request.PingOption{Attempts: 2, TimeOut: p.Options.Timeout})
++			p.WriteMessage(getMsgByte(index, "gotping", elapse))
++			if elapse < 1 {
++				p.WriteMessage(getMsgByte(index, "gotspeed", -1, -1, 0))
++			}
++		}
++	} else {
++		elapse, err = p.pingLink(index, link)
++	}
+ 	log.Printf("%d %s elapse: %dms", index, remarks, elapse)
+ 	if err != nil {
+@@
+-	speed, err := download.Download(link, p.Options.Timeout, p.Options.Timeout, ch, startCh)
++	var speed int64
++	if useExternal {
++		option := download.DownloadOption{DownloadTimeout: p.Options.Timeout, HandshakeTimeout: p.Options.Timeout, URL: "https://download.microsoft.com/download/2/0/E/20E90413-712F-438C-988E-FDAA79A8AC3D/dotnetfx35.exe"}
++		speed, err = download.DownloadWithDial(ctx, option, ch, startCh, dialFn)
++	} else {
++		speed, err = download.Download(link, p.Options.Timeout, p.Options.Timeout, ch, startCh)
++	}
+ 	// speed, err := download.DownloadRange(link, 2, p.Options.Timeout, p.Options.Timeout, ch, startCh)
+ 	if speed < 1 {
+ 		p.WriteMessage(getMsgByte(index, "gotspeed", -1, -1, 0))
+ 	}
+ 	return err
+ }

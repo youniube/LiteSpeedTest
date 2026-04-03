@@ -1,121 +1,71 @@
-# LiteSpeedTest
+# LiteSpeedTest sing-box 外挂内核改造包
 
-LiteSpeedTest is a simple tool for batch test ss/ssr/v2ray/trojan/clash servers.   
-Feature
-- 支持ss/ssr/v2ray/trojan/clash订阅链接
-- 支持ss/ssr/v2ray/trojan/clash节点链接
-- 支持ss/ssr/v2ray/trojan/clash订阅或节点文件
-- support ss/ssr/v2ray/trojan/clash subscription url,
-- support ss/ssr/v2ray/trojan/clash profile links
-- support ss/ssr/v2ray/trojan/clash subscription or profile file, 
+这个包按当前 `xxf098/LiteSpeedTest` 的实际模块名 `github.com/xxf098/lite-proxy` 写的。
 
+## 目录说明
 
- ![build](https://github.com/xxf098/LiteSpeedTest/actions/workflows/test.yaml/badge.svg?branch=master&event=push) 
+- `engine/`：新增的外部核心抽象和 sing-box runner
+- `config/vless.go`：新增的 VLESS 解析和 link 生成
+- `request/ping_dial.go`：新增的通用拨号 ping
+- `download/dial.go`：新增的通用拨号测速入口
+- `proxy/socksdial.go`：SOCKS5 CONNECT 拨号
+- `proxy/localsocks_client.go`：给 `core` 本地代理模式用的 tunnel client
+- `core/config.go`：完整替换
+- `core/core.go`：完整替换
+- `main.go`：完整替换
+- `PATCH_EXISTING_FILES.diff`：给 `config/config.go`、`config/parser.go`、`web/profile.go` 打补丁
 
-### Usage
-```
-Run as a speed test tool:
-    # run this command then open http://127.0.0.1:10888/ in your browser to start speed test
-    ./lite
-    # start with another port
-    ./lite -p 10889
-    
-    # test in command line only mode
-    ./lite --test https://raw.githubusercontent.com/freefq/free/master/v2
-    # test in command line only mode with custom config.
-    ./lite --config config.json --test https://raw.githubusercontent.com/freefq/free/master/v2
-    # details can find here https://github.com/xxf098/LiteSpeedTest/blob/master/config.json
-    # all config options:
-    #       "group":"job",   // group name
-	#       "speedtestMode":"pingonly", // speedonly pingonly all
-	#       "pingMethod":"googleping",  // googleping tcpping
-	#       "sortMethod":"rspeed",      // speed rspeed ping rping
-	#       "concurrency":1,  // concurrency number
-	#       "testMode":2,   // 2: ALLTEST 3: RETEST
-	#       "subscription":"subscription url",
-	#       "timeout":16,  // timeout in seconds
-	#       "language":"en", // en cn
-	#       "fontSize":24,
-	#       "unique": true,  // remove duplicated value
-	#       "theme":"rainbow", 
-	#       "outputMode": 1  // 0: base64 1: pic path 2: no pic 3: json 4: txt
+## 建议替换顺序
 
+1. 先把本包里的新文件复制到你的仓库对应路径
+2. 用本包里的版本覆盖：
+   - `core/config.go`
+   - `core/core.go`
+   - `main.go`
+3. 再应用 `PATCH_EXISTING_FILES.diff`
+4. 本地安装 sing-box，确认 `sing-box version` 可执行
+5. 编译前先 `go fmt ./...`
+6. 再 `go build ./...`
 
-Run as a grpc server:
-    # start the grpc server  
-    ./lite -grpc -p 10999
-    # grpc go client example in ./api/rpc/liteclient/client.go 
-    # grpc python client example in ./api/rpc/liteclientpy/client.py
+## 先验证什么
 
-Run as a http/socks5 proxy:
-    # use default port 8090
-    ./lite vmess://aHR0cHM6Ly9naXRodWIuY29tL3h4ZjA5OC9MaXRlU3BlZWRUZXN0
-    ./lite ssr://aHR0cHM6Ly9naXRodWIuY29tL3h4ZjA5OC9MaXRlU3BlZWRUZXN0
-    # use another port
-    ./lite -p 8091 vmess://aHR0cHM6Ly9naXRodWIuY29tL3h4ZjA5OC9MaXRlU3BlZWRUZXN0
-```
+### 1. 单节点本地代理
 
-### Build
 ```bash
-    # require go>=1.18.1, nodejs >= 14
-    # build frontend
-    cp $(go env GOROOT)/misc/wasm/wasm_exec.js ./web/gui/wasm_exec.js
-    npm install --prefix web/gui build
-    npm run --prefix web/gui build
-    GOOS=js GOARCH=wasm go get -u ./...
-    GOOS=js GOARCH=wasm go build -o ./web/gui/dist/main.wasm ./wasm
-    go build -o lite
+./lite --engine singbox --singbox-bin sing-box 'vless://UUID@host:443?security=tls&type=ws&path=%2Fws&host=example.com&sni=example.com#test'
 ```
 
-### Docker
-```bash
- docker build --network=host  -t lite:$(git describe --tags --abbrev=0) -f ./docker/Dockerfile ./
- docker run -p 10888:10888/tcp lite:$(git describe --tags --abbrev=0)
-```
+### 2. 命令行测速
 
-## Credits
+在 `config.json` 里额外加：
 
-- [clash](https://github.com/Dreamacro/clash)
-- [stairspeedtest-reborn](https://github.com/tindy2013/stairspeedtest-reborn)
-- [gg](https://github.com/fogleman/gg)
-
-## Developer
-```golang
-import (
-    "context"
-    "fmt"
-	"time"
-    "github.com/xxf098/lite-proxy/web"
-)
-// see more details in ./examples
-func testPing() error {
-    ctx := context.Background()
-    link := "https://www.example.com/subscription/link"
-    opts := web.ProfileTestOptions{
-		GroupName:     "Default", 
-		SpeedTestMode: "pingonly",   //  pingonly speedonly all
-		PingMethod:    "googleping", // googleping
-		SortMethod:    "rspeed", // speed rspeed ping rping
-		Concurrency:   2,
-		TestMode:      2,
-		Subscription:  link,
-		Language:      "en",  // en cn
-		FontSize:      24,
-		Theme:         "rainbow",
-        Unique:        true,
-		Timeout:       10 * time.Second,
-		OutputMode:  0,
-	}
-    nodes, err := web.TestContext(ctx, opts, &web.EmptyMessageWriter{})
-    if err != nil {
-        return err
-    }
-    // get all ok profile
-    for _, node := range nodes {
-        if node.IsOk {
-			fmt.Println(node.Remarks)
-		}
-	}
-    return nil
+```json
+{
+  "engine": "singbox",
+  "singboxBin": "sing-box",
+  "singboxWorkDir": ".lite-singbox",
+  "keepTempFile": false
 }
 ```
+
+再跑：
+
+```bash
+./lite --config config.json --test sub.txt
+```
+
+## 我认为最可能还要你手动微调的地方
+
+- `web/profile.go` 的 patch：因为这个文件较大，如果你本地仓库和 master 有少量差异，可能要手动贴进去
+- `config/parser.go`：如果你本地已经自己改过 clash 解析，也要手动合并 `case "vless"`
+- `core` 的本地代理模式：我这里已经给了 `LocalSocksClient`，但如果你本地 fork 过 `tunnel.Address` 的实现，`addr.String()` 那一行可能要改一下
+
+## 说明
+
+这套代码我是在无法本地联网拉源码编译的前提下，按仓库当前公开结构对齐写的，所以我更建议你：
+
+- 先复制这些文件
+- 执行 `go build ./...`
+- 把第一轮编译报错贴给我
+
+这样我下一轮可以按你的实际报错继续补齐。
