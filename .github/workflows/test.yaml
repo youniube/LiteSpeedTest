@@ -34,10 +34,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
 
       - name: Install system dependencies
         run: |
@@ -67,10 +63,15 @@ jobs:
           go version
           node -v
           npm -v
-
           cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" ./web/gui/wasm_exec.js
           npm install --prefix web/gui
           NODE_ENV=production npm run --prefix web/gui build
+
+      - name: Resolve Go modules
+        shell: bash
+        run: |
+          go mod download
+          go mod tidy
 
       - name: Build wasm
         shell: bash
