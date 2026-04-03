@@ -1,0 +1,45 @@
+name: Fix Go Modules
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tidy:
+    name: tidy go.mod / go.sum
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.20.14"
+          cache: true
+
+      - name: Run go mod tidy
+        shell: bash
+        run: |
+          go version
+          go mod download
+          go mod tidy
+
+      - name: Commit updated module files
+        shell: bash
+        run: |
+          if git diff --quiet -- go.mod go.sum; then
+            echo "No changes to go.mod/go.sum"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add go.mod go.sum
+          git commit -m "chore: tidy go modules"
+          git push
