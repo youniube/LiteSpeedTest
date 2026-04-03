@@ -1,4 +1,4 @@
-name: Build
+name: Build Windows
 
 on:
   push:
@@ -12,11 +12,11 @@ permissions:
 
 jobs:
   build:
-    name: build (linux, amd64, lite-linux-amd64)
-    runs-on: ubuntu-latest
+    name: build (windows, amd64, lite-windows-amd64)
+    runs-on: windows-latest
 
     env:
-      GOOS: linux
+      GOOS: windows
       GOARCH: amd64
       CGO_ENABLED: 0
 
@@ -35,68 +35,60 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq zip
-
       - name: Show workflow information
         id: get_filename
-        shell: bash
+        shell: pwsh
         run: |
-          ASSET_NAME="lite-linux-amd64"
-
-          if [ -f release/friendly-filenames.json ]; then
-            NAME_FROM_JSON=$(jq -r '."linux-amd64".friendlyName // empty' release/friendly-filenames.json)
-            if [ -n "$NAME_FROM_JSON" ] && [ "$NAME_FROM_JSON" != "null" ]; then
-              ASSET_NAME="$NAME_FROM_JSON"
-            fi
-          fi
-
-          echo "GOOS=$GOOS GOARCH=$GOARCH ASSET_NAME=$ASSET_NAME"
-          echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
+          $assetName = "lite-windows-amd64"
+          echo "ASSET_NAME=$assetName" >> $env:GITHUB_ENV
+          echo "asset_name=$assetName" >> $env:GITHUB_OUTPUT
 
       - name: Install frontend dependencies
-        shell: bash
+        shell: pwsh
         run: |
           go version
           node -v
           npm -v
-          cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" ./web/gui/wasm_exec.js
+          Copy-Item "$(go env GOROOT)\misc\wasm\wasm_exec.js" ".\web\gui\wasm_exec.js" -Force
           npm install --prefix web/gui
-          NODE_ENV=production npm run --prefix web/gui build
+          $env:NODE_ENV="production"
+          npm run --prefix web/gui build
 
       - name: Resolve Go modules
-        shell: bash
+        shell: pwsh
         run: |
           go mod download
           go mod tidy
 
       - name: Build wasm
-        shell: bash
+        shell: pwsh
         run: |
-          GOOS=js GOARCH=wasm go build -o ./web/gui/dist/main.wasm ./wasm
+          $env:GOOS="js"
+          $env:GOARCH="wasm"
+          go build -o .\web\gui\dist\main.wasm .\wasm
 
       - name: Build binary
-        shell: bash
+        shell: pwsh
         run: |
-          go build -v -o lite .
+          $env:GOOS="windows"
+          $env:GOARCH="amd64"
+          $env:CGO_ENABLED="0"
+          go build -v -o lite.exe .
 
       - name: Smoke check
-        shell: bash
+        shell: pwsh
         run: |
-          ls -lah lite
-          file lite || true
+          Get-ChildItem lite.exe
+          .\lite.exe -v
 
       - name: Create ZIP archive
-        shell: bash
+        shell: pwsh
         run: |
-          zip -9vr "lite-${ASSET_NAME}.zip" lite
+          Compress-Archive -Path lite.exe -DestinationPath "lite-$env:ASSET_NAME.zip" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lite-${{ steps.get_filename.outputs.asset_name }}.zip
+          name: ${{ steps.get_filename.outputs.asset_name }}.zip
           path: lite-${{ steps.get_filename.outputs.asset_name }}.zip
           if-no-files-found: error
