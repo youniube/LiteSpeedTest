@@ -5,91 +5,65 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/xxf098/lite-proxy/engine"
 )
 
-type Config struct {
-	Log       LogConfig   `json:"log,omitempty"`
-	Inbounds  []Inbound   `json:"inbounds"`
-	Outbounds []any       `json:"outbounds"`
-	Route     RouteConfig `json:"route,omitempty"`
-}
-
-type LogConfig struct {
-	Disabled  bool   `json:"disabled,omitempty"`
-	Level     string `json:"level,omitempty"`
-	Output    string `json:"output,omitempty"`
-	Timestamp bool   `json:"timestamp,omitempty"`
-}
-
-type Inbound struct {
-	Type           string        `json:"type"`
-	Tag            string        `json:"tag,omitempty"`
-	Listen         string        `json:"listen,omitempty"`
-	ListenPort     int           `json:"listen_port,omitempty"`
-	Users          []InboundUser `json:"users,omitempty"`
-	SetSystemProxy bool          `json:"set_system_proxy,omitempty"`
-}
-
-type InboundUser struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type RouteConfig struct {
-	Final string `json:"final,omitempty"`
-}
-
-func NewSingleNodeConfig(port int, outbound any, logLevel string) Config {
-	if logLevel == "" {
-		logLevel = "warn"
+func writeConfig(link, workDir string, listenPort int, opt engine.StartOptions) (string, string, error) {
+	if strings.TrimSpace(workDir) == "" {
+		workDir = ".lite-singbox"
+	}
+	sessionDir := filepath.Join(workDir, fmt.Sprintf("session-%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		return "", "", err
 	}
 
-	return Config{
-		Log: LogConfig{
-			Level:     logLevel,
-			Output:    "box.log",
-			Timestamp: true,
-		},
-		Inbounds: []Inbound{
-			{
-				Type:       "mixed",
-				Tag:        "mixed-in",
-				Listen:     "127.0.0.1",
-				ListenPort: port,
-			},
-		},
-		Outbounds: []any{
-			outbound,
-			map[string]any{
-				"type": "direct",
-				"tag":  "direct",
-			},
-		},
-		Route: RouteConfig{
-			Final: "proxy",
-		},
-	}
-}
-
-func WriteConfig(workDir string, cfg Config) (string, func() error, error) {
-	if workDir == "" {
-		return "", nil, fmt.Errorf("empty workDir")
-	}
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		return "", nil, err
-	}
-
-	configPath := filepath.Join(workDir, "config.json")
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	proxyOutbound, err := BuildOutbound(link)
 	if err != nil {
-		return "", nil, err
-	}
-	if err := os.WriteFile(configPath, data, 0o644); err != nil {
-		return "", nil, err
+		return "", sessionDir, err
 	}
 
-	cleanup := func() error {
-		return os.RemoveAll(workDir)
+	configObject := map[string]any{
+		"log": map[string]any{
+			"level": normalizeLogLevel(opt.LogLevel),
+		},
+		"inbounds": []any{
+			map[string]any{
+				"type":        "mixed",
+				"tag":         "mixed-in",
+				"listen":      "127.0.0.1",
+				"listen_port": listenPort,
+			},
+		},
+		"outbounds": []any{
+			proxyOutbound,
+			map[string]any{"type": "direct", "tag": "direct"},
+			map[string]any{"type": "block", "tag": "block"},
+		},
+		"route": map[string]any{
+			"final":                 "proxy",
+			"auto_detect_interface": true,
+		},
 	}
-	return configPath, cleanup, nil
+
+	configPath := filepath.Join(sessionDir, "config.json")
+	data, err := json.MarshalIndent(configObject, "", "  ")
+	if err != nil {
+		return "", sessionDir, err
+	}
+	if err = os.WriteFile(configPath, data, 0644); err != nil {
+		return "", sessionDir, err
+	}
+	return configPath, sessionDir, nil
+}
+
+func normalizeLogLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "trace", "debug", "info", "warn", "error", "fatal", "panic":
+		return strings.ToLower(strings.TrimSpace(level))
+	default:
+		return "warn"
+	}
 }

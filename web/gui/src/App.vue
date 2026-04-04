@@ -397,9 +397,9 @@ export default {
                     tcping: "TCP",
                 },
                 engines: {
-                    "": "自动（VLESS 使用 sing-box）",
+                    "": "自动（VLESS/VMess/Trojan/SS 使用 sing-box）",
                     native: "原生引擎",
-                    singbox: "强制 sing-box",
+                    singbox: "优先 sing-box（不支持时回退原生）",
                 },
                 sortMethods: {
                     rspeed: "speed 倒序",

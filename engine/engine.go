@@ -33,8 +33,24 @@ type Runner interface {
 }
 
 func NeedExternalEngine(engineName, link string) bool {
-	if strings.EqualFold(engineName, "singbox") {
-		return true
+	if strings.EqualFold(strings.TrimSpace(engineName), "native") {
+		return false
 	}
-	return strings.HasPrefix(strings.ToLower(link), "vless://")
+	return SupportsSingbox(link)
+}
+
+func SupportsSingbox(link string) bool {
+	link = strings.ToLower(strings.TrimSpace(link))
+	switch {
+	case strings.HasPrefix(link, "vless://"):
+		return true
+	case strings.HasPrefix(link, "vmess://"):
+		return true
+	case strings.HasPrefix(link, "trojan://"):
+		return true
+	case strings.HasPrefix(link, "ss://"):
+		return true
+	default:
+		return false
+	}
 }
