@@ -50,7 +50,10 @@ jobs:
           node -v
           npm -v
           Copy-Item "$(go env GOROOT)\misc\wasm\wasm_exec.js" ".\web\gui\wasm_exec.js" -Force
-          npm install --prefix web/gui
+          npm install --prefix web/gui --include=dev --no-audit --no-fund
+          if (-not (Test-Path ".\web\gui\node_modules\.bin\vite.cmd")) {
+            throw "vite is missing after npm install (devDependencies not installed)."
+          }
           $env:NODE_ENV="production"
           npm run --prefix web/gui build
 
