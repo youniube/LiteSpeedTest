@@ -600,8 +600,36 @@ func (p *ProfileTest) saveText(nodes render.Nodes) error {
 	return ioutil.WriteFile("output.txt", data, 0644)
 }
 
-func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeChan chan<- render.Node, trafficChan chan<- int64) error {
+func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeChan chan<- render.Node, trafficChan chan<- int64) (err error) {
 	defer p.wg.Done()
+
+	remarks := fmt.Sprintf("Profile %d", index)
+	protocol := "unknown"
+	var elapse int64
+	var emitted bool
+	emitFailure := func() {
+		if emitted {
+			return
+		}
+		emitted = true
+		nodeChan <- render.Node{
+			Id:       index,
+			Group:    p.Options.GroupName,
+			Remarks:  remarks,
+			Protocol: protocol,
+			Ping:     fmt.Sprintf("%d", elapse),
+			AvgSpeed: 0,
+			MaxSpeed: 0,
+			IsOk:     elapse > 0,
+		}
+	}
+	defer func() {
+		if err != nil {
+			log.Printf("test %d failed: %v", index, err)
+			emitFailure()
+		}
+	}()
+
 	if link == "" {
 		link = p.Links[index]
 		link = strings.SplitN(link, "^", 2)[0]
@@ -610,20 +638,16 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 	if err != nil {
 		return err
 	}
-	remarks := cfg.Remarks
-	if remarks == "" {
-		remarks = fmt.Sprintf("Profile %d", index)
+	if cfg.Remarks != "" {
+		remarks = cfg.Remarks
 	}
-	protocol := cfg.Protocol
+	protocol = cfg.Protocol
 	if (cfg.Protocol == "vmess" || cfg.Protocol == "trojan" || cfg.Protocol == "vless") && cfg.Net != "" {
 		protocol = fmt.Sprintf("%s/%s", cfg.Protocol, cfg.Net)
 	}
 
 	useExternal := engine.NeedExternalEngine(p.Options.Engine, link)
-	var (
-		elapse int64
-		dialFn func(network, addr string) (net.Conn, error)
-	)
+	var dialFn func(network, addr string) (net.Conn, error)
 	if useExternal {
 		singboxBin := p.Options.SingboxBin
 		if singboxBin == "" {
@@ -634,14 +658,15 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 			workDir = ".lite-singbox"
 		}
 		runner := singbox.New(singboxBin, workDir)
-		lp, err := runner.Start(ctx, link, engine.StartOptions{
+		lp, startErr := runner.Start(ctx, link, engine.StartOptions{
 			SingboxBin:   singboxBin,
 			WorkDir:      workDir,
 			LogLevel:     "warn",
 			StartupWait:  5 * time.Second,
 			KeepTempFile: p.Options.KeepTempFile,
 		})
-		if err != nil {
+		if startErr != nil {
+			err = startErr
 			return err
 		}
 		defer lp.Close(context.Background())
@@ -664,19 +689,10 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 	}
 	log.Printf("%d %s elapse: %dms", index, remarks, elapse)
 	if err != nil {
-		node := render.Node{
-			Id:       index,
-			Group:    p.Options.GroupName,
-			Remarks:  remarks,
-			Protocol: protocol,
-			Ping:     fmt.Sprintf("%d", elapse),
-			AvgSpeed: 0,
-			MaxSpeed: 0,
-			IsOk:     elapse > 0,
-		}
-		nodeChan <- node
+		emitFailure()
 		return err
 	}
+
 	_ = p.WriteMessage(getMsgByte(index, "startspeed"))
 	ch := make(chan int64, 1)
 	startCh := make(chan time.Time, 1)
@@ -695,12 +711,14 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 				}
 				sum += speed
 				duration := float64(time.Since(start)/time.Millisecond) / float64(1000)
-				avg = int64(float64(sum) / duration)
+				if duration > 0 {
+					avg = int64(float64(sum) / duration)
+				}
 				if max < speed {
 					max = speed
 				}
 				log.Printf("%d %s recv: %s", index, remarks, download.ByteCountIEC(speed))
-				err = p.WriteMessage(getMsgByte(index, "gotspeed", avg, max, speed))
+				_ = p.WriteMessage(getMsgByte(index, "gotspeed", avg, max, speed))
 				if trafficChan != nil {
 					trafficChan <- speed
 				}
@@ -722,6 +740,7 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 			IsOk:     true,
 			Traffic:  sum,
 		}
+		emitted = true
 		nodeChan <- node
 	}(ch, startCh)
 

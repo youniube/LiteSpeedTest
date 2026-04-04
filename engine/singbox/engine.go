@@ -1,30 +1,102 @@
 package singbox
 
 import (
-    "context"
+	"context"
+	"fmt"
+	"net"
+	"path/filepath"
+	"sync"
+	"time"
 
-    "github.com/xxf098/lite-proxy/engine"
+	"github.com/xxf098/lite-proxy/engine"
 )
 
-// Engine is a compatibility wrapper around Runner so older call sites that
-// reference singbox.Engine still work, while New() remains implemented by
-// process.go.
-type Engine struct {
-    BinPath  string
-    WorkRoot string
+type Runner struct {
+	binPath string
+	workDir string
 }
 
-func NewEngine(binPath, workRoot string) *Engine {
-    return &Engine{BinPath: binPath, WorkRoot: workRoot}
+func New(binPath, workDir string) *Runner {
+	return &Runner{binPath: binPath, workDir: workDir}
 }
 
-func (e *Engine) Name() string {
-    return "sing-box"
+func (r *Runner) Name() string {
+	return "sing-box"
 }
 
-func (e *Engine) Start(ctx context.Context, link string, opt engine.StartOptions) (*engine.LocalProxy, error) {
-    return New(e.BinPath, e.WorkRoot).Start(ctx, link, opt)
-}
+func (r *Runner) Start(ctx context.Context, link string, opt engine.StartOptions) (*engine.LocalProxy, error) {
+	binPath, err := resolveSingboxBinary(firstNonEmpty(opt.SingboxBin, r.binPath))
+	if err != nil {
+		return nil, err
+	}
+	workDir := firstNonEmpty(opt.WorkDir, r.workDir)
+	if workDir == "" {
+		workDir = defaultWorkDir()
+	}
+	if opt.StartupWait <= 0 {
+		opt.StartupWait = 5 * time.Second
+	}
 
-var _ engine.Runner = (*Runner)(nil)
-var _ engine.Runner = (*Engine)(nil)
+	listenPort, err := ReservePort()
+	if err != nil {
+		return nil, err
+	}
+	configPath, sessionDir, err := writeConfig(link, workDir, listenPort, opt)
+	if err != nil {
+		return nil, err
+	}
+	if absSessionDir, absErr := filepath.Abs(sessionDir); absErr == nil {
+		sessionDir = absSessionDir
+	}
+	if absConfigPath, absErr := filepath.Abs(configPath); absErr == nil {
+		configPath = absConfigPath
+	}
+
+	proc, err := startSingboxProcess(ctx, binPath, sessionDir, configPath)
+	if err != nil {
+		if !opt.KeepTempFile {
+			_ = cleanupSessionDir(sessionDir)
+		}
+		return nil, err
+	}
+
+	addr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", listenPort))
+	readyCtx, cancel := context.WithTimeout(ctx, opt.StartupWait)
+	defer cancel()
+	if err := waitTCPReady(readyCtx, addr); err != nil {
+		_ = proc.Close(true)
+		if !opt.KeepTempFile {
+			_ = cleanupSessionDir(sessionDir)
+		}
+		return nil, fmt.Errorf("start sing-box failed: %w", err)
+	}
+
+	var once sync.Once
+	closeFunc := func(closeCtx context.Context) error {
+		var closeErr error
+		once.Do(func() {
+			done := make(chan struct{})
+			go func() {
+				closeErr = proc.Close(true)
+				if !opt.KeepTempFile {
+					if err := cleanupSessionDir(sessionDir); err != nil && closeErr == nil {
+						closeErr = err
+					}
+				}
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-closeCtx.Done():
+				closeErr = closeCtx.Err()
+			}
+		})
+		return closeErr
+	}
+
+	return &engine.LocalProxy{
+		HTTPAddr:  addr,
+		SOCKSAddr: addr,
+		CloseFunc: closeFunc,
+	}, nil
+}

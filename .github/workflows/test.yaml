@@ -14,11 +14,11 @@ jobs:
   build:
     name: build (windows, amd64, lite-windows-amd64)
     runs-on: windows-latest
-
     env:
       GOOS: windows
       GOARCH: amd64
       CGO_ENABLED: 0
+      SINGBOX_VERSION: 1.13.5
 
     steps:
       - name: Checkout
@@ -49,16 +49,12 @@ jobs:
           go version
           node -v
           npm -v
-
           Copy-Item "$(go env GOROOT)\misc\wasm\wasm_exec.js" ".\web\gui\wasm_exec.js" -Force
-
           Push-Location ".\web\gui"
           npm install --include=dev --no-audit --no-fund
-
           if (-not (Test-Path ".\node_modules\.bin\vite.cmd")) {
             throw "vite is missing after npm install (devDependencies not installed)."
           }
-
           $env:NODE_ENV = "production"
           npm run build
           Pop-Location
@@ -84,16 +80,30 @@ jobs:
           $env:CGO_ENABLED = "0"
           go build -v -o lite.exe .
 
+      - name: Download sing-box
+        shell: pwsh
+        run: |
+          $zipName = "sing-box-$env:SINGBOX_VERSION-windows-amd64.zip"
+          $url = "https://github.com/SagerNet/sing-box/releases/download/v$env:SINGBOX_VERSION/$zipName"
+          Invoke-WebRequest -Uri $url -OutFile $zipName
+          Expand-Archive -Path $zipName -DestinationPath .\singbox-dist -Force
+          $exe = Get-ChildItem -Path .\singbox-dist -Recurse -Filter "sing-box.exe" | Select-Object -First 1
+          if (-not $exe) {
+            throw "sing-box.exe not found in downloaded archive"
+          }
+          Copy-Item $exe.FullName .\sing-box.exe -Force
+
       - name: Smoke check
         shell: pwsh
         run: |
-          Get-ChildItem lite.exe
+          Get-ChildItem .\lite.exe, .\sing-box.exe
           .\lite.exe -v
+          .\sing-box.exe version
 
       - name: Create ZIP archive
         shell: pwsh
         run: |
-          Compress-Archive -Path lite.exe -DestinationPath "lite-$env:ASSET_NAME.zip" -Force
+          Compress-Archive -Path lite.exe, sing-box.exe -DestinationPath "lite-$env:ASSET_NAME.zip" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

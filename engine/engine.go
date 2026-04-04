@@ -33,7 +33,8 @@ type Runner interface {
 }
 
 func NeedExternalEngine(engineName, link string) bool {
-	if strings.EqualFold(strings.TrimSpace(engineName), "native") {
+	engineName = strings.ToLower(strings.TrimSpace(engineName))
+	if engineName == "native" {
 		return false
 	}
 	return SupportsSingbox(link)

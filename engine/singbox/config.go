@@ -16,7 +16,7 @@ func writeConfig(link, workDir string, listenPort int, opt engine.StartOptions) 
 		workDir = ".lite-singbox"
 	}
 	sessionDir := filepath.Join(workDir, fmt.Sprintf("session-%d", time.Now().UnixNano()))
-	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return "", "", err
 	}
 
@@ -53,7 +53,7 @@ func writeConfig(link, workDir string, listenPort int, opt engine.StartOptions) 
 	if err != nil {
 		return "", sessionDir, err
 	}
-	if err = os.WriteFile(configPath, data, 0644); err != nil {
+	if err = os.WriteFile(configPath, data, 0o644); err != nil {
 		return "", sessionDir, err
 	}
 	return configPath, sessionDir, nil
