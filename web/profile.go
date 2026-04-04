@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +23,9 @@ import (
 
 	"github.com/xxf098/lite-proxy/config"
 	"github.com/xxf098/lite-proxy/download"
+	"github.com/xxf098/lite-proxy/engine"
+	"github.com/xxf098/lite-proxy/engine/singbox"
+	proxydial "github.com/xxf098/lite-proxy/proxy"
 	"github.com/xxf098/lite-proxy/request"
 	"github.com/xxf098/lite-proxy/utils"
 	"github.com/xxf098/lite-proxy/web/render"
@@ -322,6 +326,10 @@ type ProfileTestOptions struct {
 	Unique          bool          `json:"unique"`
 	GeneratePicMode int           `json:"generatePicMode"` // 0: base64 1:pic path 2: no pic 3: json @deprecated use outputMode
 	OutputMode      int           `json:"outputMode"`
+	Engine          string        `json:"engine,omitempty"`
+	SingboxBin      string        `json:"singboxBin,omitempty"`
+	SingboxWorkDir  string        `json:"singboxWorkDir,omitempty"`
+	KeepTempFile    bool          `json:"keepTempFile,omitempty"`
 }
 
 type JSONOutput struct {
@@ -593,7 +601,6 @@ func (p *ProfileTest) saveText(nodes render.Nodes) error {
 }
 
 func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeChan chan<- render.Node, trafficChan chan<- int64) error {
-	// panic
 	defer p.wg.Done()
 	if link == "" {
 		link = p.Links[index]
@@ -604,14 +611,57 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 		return err
 	}
 	remarks := cfg.Remarks
-	if err != nil || remarks == "" {
+	if remarks == "" {
 		remarks = fmt.Sprintf("Profile %d", index)
 	}
 	protocol := cfg.Protocol
-	if (cfg.Protocol == "vmess" || cfg.Protocol == "trojan") && cfg.Net != "" {
+	if (cfg.Protocol == "vmess" || cfg.Protocol == "trojan" || cfg.Protocol == "vless") && cfg.Net != "" {
 		protocol = fmt.Sprintf("%s/%s", cfg.Protocol, cfg.Net)
 	}
-	elapse, err := p.pingLink(index, link)
+
+	useExternal := engine.NeedExternalEngine(p.Options.Engine, link)
+	var (
+		elapse int64
+		dialFn func(network, addr string) (net.Conn, error)
+	)
+	if useExternal {
+		singboxBin := p.Options.SingboxBin
+		if singboxBin == "" {
+			singboxBin = "sing-box"
+		}
+		workDir := p.Options.SingboxWorkDir
+		if workDir == "" {
+			workDir = ".lite-singbox"
+		}
+		runner := singbox.New(singboxBin, workDir)
+		lp, err := runner.Start(ctx, link, engine.StartOptions{
+			SingboxBin:   singboxBin,
+			WorkDir:      workDir,
+			LogLevel:     "warn",
+			StartupWait:  5 * time.Second,
+			KeepTempFile: p.Options.KeepTempFile,
+		})
+		if err != nil {
+			return err
+		}
+		defer lp.Close(context.Background())
+		dialFn = proxydial.NewSocks5DialFunc(lp.SOCKSAddr, p.Options.Timeout)
+		if p.Options.SpeedTestMode == SpeedOnly {
+			elapse = 0
+		} else {
+			p.WriteMessage(getMsgByte(index, "startping"))
+			elapse, err = request.PingWithDial(ctx, dialFn, request.PingOption{Attempts: 2, TimeOut: p.Options.Timeout})
+			p.WriteMessage(getMsgByte(index, "gotping", elapse))
+			if elapse < 1 {
+				p.WriteMessage(getMsgByte(index, "gotspeed", -1, -1, 0))
+			} else if p.Options.SpeedTestMode == PingOnly {
+				p.WriteMessage(getMsgByte(index, "gotspeed", -1, -1, 0))
+				err = errors.New(PingOnly)
+			}
+		}
+	} else {
+		elapse, err = p.pingLink(index, link)
+	}
 	log.Printf("%d %s elapse: %dms", index, remarks, elapse)
 	if err != nil {
 		node := render.Node{
@@ -627,7 +677,7 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 		nodeChan <- node
 		return err
 	}
-	err = p.WriteMessage(getMsgByte(index, "startspeed"))
+	_ = p.WriteMessage(getMsgByte(index, "startspeed"))
 	ch := make(chan int64, 1)
 	startCh := make(chan time.Time, 1)
 	defer close(ch)
@@ -674,8 +724,17 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 		}
 		nodeChan <- node
 	}(ch, startCh)
-	speed, err := download.Download(link, p.Options.Timeout, p.Options.Timeout, ch, startCh)
-	// speed, err := download.DownloadRange(link, 2, p.Options.Timeout, p.Options.Timeout, ch, startCh)
+
+	var speed int64
+	if useExternal {
+		speed, err = download.DownloadWithDial(ctx, download.DownloadOption{
+			URL:              "https://download.microsoft.com/download/2/0/E/20E90413-712F-438C-988E-FDAA79A8AC3D/dotnetfx35.exe",
+			DownloadTimeout:  p.Options.Timeout,
+			HandshakeTimeout: p.Options.Timeout,
+		}, ch, startCh, dialFn)
+	} else {
+		speed, err = download.Download(link, p.Options.Timeout, p.Options.Timeout, ch, startCh)
+	}
 	if speed < 1 {
 		p.WriteMessage(getMsgByte(index, "gotspeed", -1, -1, 0))
 	}

@@ -18,7 +18,7 @@
                                     <el-form-item label="链接：" v-if="option<2">
                                         <el-col :span="8">
                                             <el-input v-model="subscription" style="width: 800px"
-                                            @keyup.enter.native="submit" placeholder="支持 V2Ray/Trojan/SS/SSR/Clash 订阅链接，订阅文件及节点链接的批量测速"
+                                            @keyup.enter.native="submit" placeholder="支持 VLESS/V2Ray/Trojan/SS/SSR/Clash 订阅链接，订阅文件及节点链接的批量测速"
                                             :disabled="loading||upload" clearable></el-input>
                                         </el-col>
                                         <el-col :span="12" ></el-col>
@@ -47,6 +47,24 @@
                                     </el-form-item>
                                     <el-form-item label="去除重复节点：" v-if="option===1">
                                         <el-checkbox v-model="unique">去重</el-checkbox>
+                                    </el-form-item>
+                                    <el-form-item label="测速引擎：" v-if="option===1">
+                                        <el-select v-model="engine" :disabled="loading">
+                                            <el-option v-for="(item, key, index) in init.engines" :key="index"
+                                                :label="item" :value="key">
+                                            </el-option>
+                                        </el-select>
+                                    </el-form-item>
+                                    <el-form-item label="sing-box程序：" v-if="option===1 && engine !== 'native'">
+                                        <el-input v-model="singboxBin" style="width: 235px"
+                                            @keyup.enter.native="submit" :disabled="loading" clearable></el-input>
+                                    </el-form-item>
+                                    <el-form-item label="临时目录：" v-if="option===1 && engine !== 'native'">
+                                        <el-input v-model="singboxWorkDir" style="width: 235px"
+                                            @keyup.enter.native="submit" :disabled="loading" clearable></el-input>
+                                    </el-form-item>
+                                    <el-form-item label="保留临时文件：" v-if="option===1 && engine !== 'native'">
+                                        <el-checkbox v-model="keepTempFile">保留</el-checkbox>
                                     </el-form-item>
                                     <el-form-item label="测试项：" v-if="option<2">
                                         <el-select v-model="speedtestMode" :disabled="loading">
@@ -227,7 +245,11 @@
                                     <div>Vmess</div>
                                 </li>
                                 <li v-if="!dashboardCollapsed">
-                                    <span>{{ result.filter(item => item.protocol === "trojan").length }}</span>
+                                    <span>{{ result.filter(item => item.protocol.startsWith("vless")).length }}</span>
+                                    <div>Vless</div>
+                                </li>
+                                <li v-if="!dashboardCollapsed">
+                                    <span>{{ result.filter(item => item.protocol === "trojan" || item.protocol.startsWith("trojan/")).length }}</span>
                                     <div>Trojan</div>
                                 </li>
                                 <li v-if="!dashboardCollapsed">
@@ -327,6 +349,10 @@ export default {
             concurrency: 2,
             timeout: 15,
             unique: true,
+            engine: "",
+            singboxBin: "sing-box",
+            singboxWorkDir: ".lite-singbox",
+            keepTempFile: false,
             groupname: "",
             loadingContent: "",
             speedtestMode: "all",
@@ -369,6 +395,11 @@ export default {
                 pingMethods: {
                     googleping: "Google",
                     tcping: "TCP",
+                },
+                engines: {
+                    "": "自动（VLESS 使用 sing-box）",
+                    native: "原生引擎",
+                    singbox: "强制 sing-box",
                 },
                 sortMethods: {
                     rspeed: "speed 倒序",
@@ -899,6 +930,10 @@ export default {
                 language: self.language,
                 fontSize: parseInt(self.fontSize),
                 theme: self.theme,
+                engine: self.engine,
+                singboxBin: self.singboxBin || "sing-box",
+                singboxWorkDir: self.singboxWorkDir || ".lite-singbox",
+                keepTempFile: !!self.keepTempFile,
             }
         },
         getOptions() {
@@ -1139,6 +1174,9 @@ export default {
         filterProtocol: function (value, row) {
             if (value === "vmess") {
                 return row.protocol.startsWith("vmess")
+            }
+            if (value === "vless") {
+                return row.protocol.startsWith("vless")
             }
             if (value === "trojan") {
                 return row.protocol.startsWith("trojan")

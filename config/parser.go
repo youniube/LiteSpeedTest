@@ -183,6 +183,14 @@ func ParseProxy(mapping map[string]interface{}, namePrefix string) (string, erro
 		if len(httpOption.Name) > 0 {
 			link = fmt.Sprintf("%s#%s%s", link, namePrefix, url.QueryEscape(httpOption.Name))
 		}
+	case "vless":
+		vlessOption := &VlessOption{}
+		err = decoder.Decode(mapping, vlessOption)
+		if err != nil {
+			break
+		}
+		vlessOption.Normalize()
+		link, err = VlessOptionToLink(vlessOption, namePrefix)
 	default:
 		return "", fmt.Errorf("unsupport proxy type: %s", proxyType)
 	}
