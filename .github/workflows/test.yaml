@@ -40,8 +40,8 @@ jobs:
         shell: pwsh
         run: |
           $assetName = "lite-windows-amd64"
-          echo "ASSET_NAME=$assetName" >> $env:GITHUB_ENV
-          echo "asset_name=$assetName" >> $env:GITHUB_OUTPUT
+          "ASSET_NAME=$assetName" >> $env:GITHUB_ENV
+          "asset_name=$assetName" >> $env:GITHUB_OUTPUT
 
       - name: Install frontend dependencies
         shell: pwsh
@@ -49,13 +49,19 @@ jobs:
           go version
           node -v
           npm -v
+
           Copy-Item "$(go env GOROOT)\misc\wasm\wasm_exec.js" ".\web\gui\wasm_exec.js" -Force
-          npm install --prefix web/gui --include=dev --no-audit --no-fund
-          if (-not (Test-Path ".\web\gui\node_modules\.bin\vite.cmd")) {
+
+          Push-Location ".\web\gui"
+          npm install --include=dev --no-audit --no-fund
+
+          if (-not (Test-Path ".\node_modules\.bin\vite.cmd")) {
             throw "vite is missing after npm install (devDependencies not installed)."
           }
-          $env:NODE_ENV="production"
-          npm run --prefix web/gui build
+
+          $env:NODE_ENV = "production"
+          npm run build
+          Pop-Location
 
       - name: Resolve Go modules
         shell: pwsh
@@ -66,16 +72,16 @@ jobs:
       - name: Build wasm
         shell: pwsh
         run: |
-          $env:GOOS="js"
-          $env:GOARCH="wasm"
+          $env:GOOS = "js"
+          $env:GOARCH = "wasm"
           go build -o .\web\gui\dist\main.wasm .\wasm
 
       - name: Build binary
         shell: pwsh
         run: |
-          $env:GOOS="windows"
-          $env:GOARCH="amd64"
-          $env:CGO_ENABLED="0"
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          $env:CGO_ENABLED = "0"
           go build -v -o lite.exe .
 
       - name: Smoke check
