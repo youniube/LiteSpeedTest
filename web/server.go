@@ -32,6 +32,7 @@ func ServeFile(port int) error {
 	http.HandleFunc("/getSubscriptionLink", getSubscriptionLink)
 	http.HandleFunc("/getSubscription", getSubscription)
 	http.HandleFunc("/generateResult", generateResult)
+	http.HandleFunc("/renameNodes", renameNodesHandler)
 	log.Printf("Start server at http://127.0.0.1:%d\n", port)
 	if ipAddr, err := localIP(); err == nil {
 		log.Printf("Start server at http://%s", net.JoinHostPort(ipAddr.String(), strconv.Itoa(port)))

@@ -73,6 +73,13 @@
                                             </el-option>
                                         </el-select>
                                     </el-form-item>
+                                    <el-form-item label="重命名兜底：" v-if="option<2">
+                                        <el-checkbox v-model="renameUseExternal" :disabled="loading">外部查询</el-checkbox>
+                                        <el-input v-model="renameIntervalMs" style="width: 160px; margin-left: 12px" type="number" min="300" max="5000"
+                                            :disabled="loading || !renameUseExternal">
+                                            <template #append>ms</template>
+                                        </el-input>
+                                    </el-form-item>
                                     <el-form-item label="自定义组名：" v-if="option<2">
                                         <el-input v-model="groupname" style="width: 235px" 
                                             @keyup.enter.native="submit" :disabled="loading" clearable></el-input>
@@ -148,6 +155,7 @@
                                         <el-dropdown-menu slot="dropdown">
                                             <el-dropdown-item @click.native="handleCopySub()">复制订阅链接</el-dropdown-item>
                                             <el-dropdown-item v-if="!loading && result.length" @click.native="handleCopyAvailable()">复制可用节点</el-dropdown-item>
+                                            <el-dropdown-item v-if="!loading && result.length" @click.native="handleSmartRename()">智能重命名</el-dropdown-item>
                                             <el-dropdown-item v-if="multipleSelection.length" @click.native="handleCopy()">复制节点</el-dropdown-item>
                                             <el-dropdown-item v-if="multipleSelection.length" @click.native="handleSave()">导出节点</el-dropdown-item>
                                             <!-- <el-dropdown-item @click.native="handleRetest()">重新测试</el-dropdown-item> -->
@@ -221,7 +229,7 @@
                                     <div>Progress</div>
                                 </div>
                                 <div v-if="!dashboardCollapsed" class="progress-item">
-                                    <span>{{ testOkCount }}/{{ result.length }}</span>
+                                    <span>{{ availableCount(result) }}/{{ result.length }}</span>
                                     <div>Ratio</div>
                                 </div>
                                 <div v-if="!dashboardCollapsed" class="traffic">
@@ -237,7 +245,7 @@
                         <el-card class="category" v-memo="[result]">
                             <ul>
                                 <li v-if="dashboardCollapsed">
-                                    <span>{{ result.filter(item => item.ping > 0).length }}/{{ result.length }}</span>
+                                    <span>{{ availableCount(result) }}/{{ result.length }}</span>
                                     <div>Ratio</div>
                                 </li>
                                 <li v-if="!dashboardCollapsed">
@@ -373,6 +381,8 @@ export default {
             dashboardCollapsed: true,
             testCount: 0,
             testOkCount: 0,
+            renameUseExternal: false,
+            renameIntervalMs: 1200,
             sortState: {},
             // agGrid
             columns: this.columns,
@@ -511,8 +521,34 @@ export default {
             if (i === 0) return `${bytes} ${sizes[i]})`;
             return `${(bytes / (1024 ** i)).toFixed(1)} ${sizes[i]}`;
         },
+        metricPositive(value) {
+            if (value === null || value === undefined) {
+                return false;
+            }
+            if (typeof value === 'number') {
+                return value > 0;
+            }
+            const raw = `${value}`.trim();
+            if (!raw.length || raw === '测试中...') {
+                return false;
+            }
+            if (raw.endsWith('B')) {
+                return this.getSpeed(raw) > 0;
+            }
+            const number = parseFloat(raw);
+            return !isNaN(number) && number > 0;
+        },
+        nodeAvailable(item) {
+            if (!item) {
+                return false;
+            }
+            return this.metricPositive(item.ping) || this.metricPositive(item.speed) || this.metricPositive(item.maxspeed);
+        },
+        availableCount(items) {
+            return Array.isArray(items) ? items.filter(item => this.nodeAvailable(item)).length : 0;
+        },
         testProgress: function (result, testCount) {
-            return result.length ? Math.floor(testCount/result.length*100) : 0
+            return result.length ? Math.min(100, Math.floor(testCount/result.length*100)) : 0
         },
         formatSeconds: function (seconds) {
             let totalTime = seconds > 0 ? seconds : 0
@@ -1006,7 +1042,8 @@ export default {
                         loss: "0.00%",
                         ping: "0.00",
                         speed: "0.00B",
-                        maxspeed: "0.00B"
+                        maxspeed: "0.00B",
+                        completed: false,
                     };
                     this.result[id] = item;
                     this.updateRow(id, item);
@@ -1023,7 +1060,8 @@ export default {
                             loss: "0.00%",
                             ping: "0.00",
                             speed: "0.00B",
-                            maxspeed: "0.00B"
+                            maxspeed: "0.00B",
+                            completed: false,
                         };
                         this.result[json.id] = item;
                         return item
@@ -1036,6 +1074,13 @@ export default {
                     break;							
                 case "endone":
                     item = this.result[id];
+                    if (!item) {
+                        break;
+                    }
+                    if (!item.completed) {
+                        this.testCount += 1
+                    }
+                    item.completed = true
                     item.testing = false
                     this.result[id] = item;
                     this.updateRow(id, item);
@@ -1047,12 +1092,11 @@ export default {
                 case "gotping":
                     //clearInterval(interval)
                     item = this.result[id];
+                    if (!item) {
+                        break;
+                    }
                     // item.loss = json.loss;
                     item.ping = json.ping || 0;
-                    this.testCount += 1
-                    if (item.ping > 0) {
-                        this.testOkCount += 1
-                    }
                     /*
                                 item = {
                                     "group": json.group,
