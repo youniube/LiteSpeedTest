@@ -73,7 +73,7 @@
                                             </el-option>
                                         </el-select>
                                     </el-form-item>
-                                    <el-form-item label="重命名兜底：" v-if="option<2">
+                                    <el-form-item label="重命名：" v-if="option<2">
                                         <el-checkbox v-model="renameUseExternal" :disabled="loading">外部查询</el-checkbox>
                                         <el-input v-model="renameIntervalMs" style="width: 160px; margin-left: 12px" type="number" min="300" max="5000"
                                             :disabled="loading || !renameUseExternal">
@@ -155,7 +155,7 @@
                                         <el-dropdown-menu slot="dropdown">
                                             <el-dropdown-item @click.native="handleCopySub()">复制订阅链接</el-dropdown-item>
                                             <el-dropdown-item v-if="!loading && result.length" @click.native="handleCopyAvailable()">复制可用节点</el-dropdown-item>
-                                            <el-dropdown-item v-if="!loading && result.length" @click.native="handleSmartRename()">智能重命名</el-dropdown-item>
+                                            <el-dropdown-item v-if="!loading && result.length" @click.native="handleSmartRename()">重命名节点</el-dropdown-item>
                                             <el-dropdown-item v-if="multipleSelection.length" @click.native="handleCopy()">复制节点</el-dropdown-item>
                                             <el-dropdown-item v-if="multipleSelection.length" @click.native="handleSave()">导出节点</el-dropdown-item>
                                             <!-- <el-dropdown-item @click.native="handleRetest()">重新测试</el-dropdown-item> -->
@@ -381,7 +381,7 @@ export default {
             dashboardCollapsed: true,
             testCount: 0,
             testOkCount: 0,
-            renameUseExternal: false,
+            renameUseExternal: true,
             renameIntervalMs: 1200,
             sortState: {},
             // agGrid
@@ -513,6 +513,64 @@ export default {
         onSelectionChanged() {
             const selectedRows = this.gridApi.getSelectedRows();
             this.multipleSelection = selectedRows;
+        },
+        applyRenamedNodes(nodes) {
+            if (!Array.isArray(nodes) || !nodes.length) {
+                return;
+            }
+            const updates = [];
+            nodes.forEach(node => {
+                const current = this.result[node.id];
+                if (!current) {
+                    return;
+                }
+                const next = { ...current, remark: node.remark || current.remark };
+                this.result[node.id] = next;
+                updates.push(next);
+            });
+            if (updates.length && this.gridApi) {
+                this.gridApi.applyTransaction({ update: updates });
+            }
+        },
+        async handleSmartRename(showNotice = true) {
+            if (!Array.isArray(this.result) || !this.result.length) {
+                return;
+            }
+            const payload = {
+                useExternal: !!this.renameUseExternal,
+                intervalMs: parseInt(this.renameIntervalMs, 10) || 1200,
+                nodes: this.result
+                    .filter(item => !!item)
+                    .map(item => ({
+                        id: item.id,
+                        remark: item.remark,
+                        server: item.server,
+                        protocol: item.protocol,
+                        link: item.link,
+                    })),
+            };
+            try {
+                const resp = await fetch('/renameNodes', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload),
+                });
+                if (!resp.ok) {
+                    throw new Error(await resp.text());
+                }
+                const data = await resp.json();
+                this.applyRenamedNodes(data.nodes || []);
+                if (showNotice) {
+                    this.$notify.success('节点重命名完成');
+                }
+            } catch (err) {
+                if (showNotice) {
+                    this.$notify.error(`节点重命名失败：${err}`);
+                }
+                throw err;
+            }
         },
         bytesToSize: function (bytes) {
             const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
@@ -1133,7 +1191,11 @@ export default {
                     break;
                 case "eof":
                     this.loading = false;
-                    this.$notify.success(`${this.result.length}个节点测试完成`);
+                    this.handleSmartRename(false)
+                        .catch(() => {})
+                        .finally(() => {
+                            this.$notify.success(`${this.result.length}个节点测试完成`);
+                        });
                     break;
                 case "retest":
                     item = this.result[id];

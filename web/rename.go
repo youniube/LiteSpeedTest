@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"net"
 	"net/http"
 	"net/url"
@@ -39,20 +38,70 @@ type renameResponse struct {
 }
 
 type renameGeoCacheEntry struct {
-	Label     string    `json:"label"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	Info      renameLocation `json:"info"`
+	ExpiresAt time.Time      `json:"expiresAt"`
+}
+
+type renameLocation struct {
+	Code string `json:"code"`
+	Zh   string `json:"zh"`
+}
+
+type renameAlias struct {
+	Code     string
+	Zh       string
+	Keywords []string
 }
 
 var (
-	renameCacheMu       sync.Mutex
-	renameLastExternal  time.Time
-	renameGeoCache      map[string]renameGeoCacheEntry
-	renameGeoCacheOnce  sync.Once
-	renameSeparatorExpr = regexp.MustCompile(`[|_/]+`)
-	renameSpaceExpr     = regexp.MustCompile(`\s+`)
-	renameProfileExpr   = regexp.MustCompile(`(?i)^profile\s*\d+$`)
-	renameNoiseExpr     = regexp.MustCompile(`(?i)^(default|node|server|unnamed|untitled|unknown|test)$`)
+	renameCacheMu      sync.Mutex
+	renameLastExternal time.Time
+	renameGeoCache     map[string]renameGeoCacheEntry
+	renameGeoCacheOnce sync.Once
+
+	renameSplitExpr  = regexp.MustCompile(`[\s|/_\\\-]+`)
+	renameCleanExpr  = regexp.MustCompile(`[^a-z0-9\p{Han}]+`)
+	renameSpaceExpr  = regexp.MustCompile(`\s+`)
+	renameIPv4Expr   = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
+	renamePortExpr   = regexp.MustCompile(`:\d+$`)
+	renameNumberExpr = regexp.MustCompile(`\d+`)
+
+	renameAliases = []renameAlias{
+		{Code: "HK", Zh: "香港", Keywords: []string{"香港", "hongkong", "hong-kong", "hong_kong", "hk"}},
+		{Code: "TW", Zh: "台湾", Keywords: []string{"台湾", "taiwan", "taipei", "tw"}},
+		{Code: "MO", Zh: "澳门", Keywords: []string{"澳门", "macao", "macau", "mo"}},
+		{Code: "SG", Zh: "新加坡", Keywords: []string{"新加坡", "singapore", "sg"}},
+		{Code: "JP", Zh: "日本", Keywords: []string{"日本", "japan", "tokyo", "osaka", "jp"}},
+		{Code: "KR", Zh: "韩国", Keywords: []string{"韩国", "korea", "seoul", "kr"}},
+		{Code: "US", Zh: "美国", Keywords: []string{"美国", "usa", "unitedstates", "united-states", "america", "losangeles", "sanjose", "newyork", "us"}},
+		{Code: "CA", Zh: "加拿大", Keywords: []string{"加拿大", "canada", "toronto", "vancouver", "ca"}},
+		{Code: "GB", Zh: "英国", Keywords: []string{"英国", "uk", "unitedkingdom", "united-kingdom", "england", "london", "gb"}},
+		{Code: "DE", Zh: "德国", Keywords: []string{"德国", "germany", "frankfurt", "de"}},
+		{Code: "FR", Zh: "法国", Keywords: []string{"法国", "france", "paris", "fr"}},
+		{Code: "NL", Zh: "荷兰", Keywords: []string{"荷兰", "netherlands", "amsterdam", "nl"}},
+		{Code: "AU", Zh: "澳大利亚", Keywords: []string{"澳大利亚", "australia", "sydney", "melbourne", "au"}},
+		{Code: "MY", Zh: "马来西亚", Keywords: []string{"马来西亚", "malaysia", "kualalumpur", "my"}},
+		{Code: "TH", Zh: "泰国", Keywords: []string{"泰国", "thailand", "bangkok", "th"}},
+		{Code: "VN", Zh: "越南", Keywords: []string{"越南", "vietnam", "hanoi", "hochiminh", "vn"}},
+		{Code: "PH", Zh: "菲律宾", Keywords: []string{"菲律宾", "philippines", "manila", "ph"}},
+		{Code: "IN", Zh: "印度", Keywords: []string{"印度", "india", "mumbai", "delhi", "in"}},
+		{Code: "RU", Zh: "俄罗斯", Keywords: []string{"俄罗斯", "russia", "moscow", "ru"}},
+		{Code: "TR", Zh: "土耳其", Keywords: []string{"土耳其", "turkey", "istanbul", "tr"}},
+		{Code: "BR", Zh: "巴西", Keywords: []string{"巴西", "brazil", "saopaulo", "br"}},
+		{Code: "AR", Zh: "阿根廷", Keywords: []string{"阿根廷", "argentina", "ar"}},
+		{Code: "AE", Zh: "阿联酋", Keywords: []string{"阿联酋", "uae", "dubai", "emirates", "ae"}},
+		{Code: "ID", Zh: "印度尼西亚", Keywords: []string{"印度尼西亚", "indonesia", "jakarta", "id"}},
+		{Code: "CN", Zh: "中国", Keywords: []string{"中国", "china", "beijing", "shanghai", "guangzhou", "shenzhen", "cn"}},
+	}
+
+	renameCodeMap = map[string]string{}
 )
+
+func init() {
+	for _, alias := range renameAliases {
+		renameCodeMap[strings.ToUpper(alias.Code)] = alias.Zh
+	}
+}
 
 func renameNodesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -66,7 +115,9 @@ func renameNodesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
 	if len(req.Nodes) == 0 {
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(renameResponse{Nodes: []renameNode{}})
 		return
 	}
@@ -87,14 +138,14 @@ func renameNodesHandler(w http.ResponseWriter, r *http.Request) {
 
 func smartRenameNodes(ctx context.Context, nodes []renameNode, useExternal bool, interval time.Duration) ([]renameNode, error) {
 	outputs := make([]renameNode, len(nodes))
-	counts := map[string]int{}
 	totals := map[string]int{}
+	counts := map[string]int{}
 	bases := make([]string, len(nodes))
 
 	for i, node := range nodes {
 		base := buildRenameBase(ctx, node, useExternal, interval)
 		if base == "" {
-			base = fmt.Sprintf("Node %d", node.ID+1)
+			base = "🌐UN-未知"
 		}
 		bases[i] = base
 		totals[base]++
@@ -103,10 +154,7 @@ func smartRenameNodes(ctx context.Context, nodes []renameNode, useExternal bool,
 	for i, node := range nodes {
 		base := bases[i]
 		counts[base]++
-		node.Remark = base
-		if totals[base] > 1 {
-			node.Remark = fmt.Sprintf("%s %02d", base, counts[base])
-		}
+		node.Remark = fmt.Sprintf("%s %02d", base, counts[base])
 		outputs[i] = node
 	}
 	return outputs, nil
@@ -115,125 +163,253 @@ func smartRenameNodes(ctx context.Context, nodes []renameNode, useExternal bool,
 func buildRenameBase(ctx context.Context, node renameNode, useExternal bool, interval time.Duration) string {
 	remark := strings.TrimSpace(node.Remark)
 	server := strings.TrimSpace(node.Server)
-	protocol := normalizeProtocolLabel(node.Protocol)
+	link := strings.TrimSpace(node.Link)
 
-	if cfg, err := config.Link2Config(node.Link); err == nil {
+	if cfg, err := config.Link2Config(link); err == nil {
 		if strings.TrimSpace(cfg.Remarks) != "" {
 			remark = cfg.Remarks
 		}
 		if strings.TrimSpace(cfg.Server) != "" {
 			server = cfg.Server
 		}
-		if strings.TrimSpace(cfg.Protocol) != "" {
-			protocol = normalizeProtocolLabel(cfg.Protocol)
-			if cfg.Net != "" && !strings.Contains(protocol, "/") {
-				protocol = fmt.Sprintf("%s/%s", protocol, strings.ToLower(strings.TrimSpace(cfg.Net)))
+	}
+
+	if loc := inferLocationFromRemark(remark); loc.Code != "" {
+		return formatRenameBase(loc)
+	}
+	if loc := inferLocationFromServer(server); loc.Code != "" {
+		return formatRenameBase(loc)
+	}
+	if useExternal {
+		if loc := lookupGeoLocation(ctx, server, interval); loc.Code != "" {
+			return formatRenameBase(loc)
+		}
+	}
+	return formatRenameBase(renameLocation{Code: "UN", Zh: "未知"})
+}
+
+func inferLocationFromRemark(remark string) renameLocation {
+	if strings.TrimSpace(remark) == "" {
+		return renameLocation{}
+	}
+	normalized := normalizeMatchText(remark)
+	if normalized == "" {
+		return renameLocation{}
+	}
+
+	tokens := renameSplitExpr.Split(normalized, -1)
+	for i, token := range tokens {
+		if i >= 4 {
+			break
+		}
+		if loc := lookupAliasToken(token, true); loc.Code != "" {
+			return loc
+		}
+	}
+	for _, token := range tokens {
+		if loc := lookupAliasToken(token, false); loc.Code != "" {
+			return loc
+		}
+	}
+	compact := strings.ReplaceAll(normalized, " ", "")
+	for _, alias := range renameAliases {
+		for _, kw := range alias.Keywords {
+			compactKW := strings.ReplaceAll(strings.ToLower(kw), " ", "")
+			if compactKW == "" {
+				continue
+			}
+			if strings.Contains(compact, compactKW) {
+				return renameLocation{Code: alias.Code, Zh: alias.Zh}
 			}
 		}
 	}
-
-	cleaned := normalizeRemark(remark)
-	if isUsefulRemark(cleaned) {
-		return cleaned
-	}
-
-	var geoLabel string
-	if useExternal {
-		geoLabel = lookupGeoLabel(ctx, server, interval)
-	}
-	if geoLabel == "" {
-		geoLabel = normalizeHostLabel(server)
-	}
-	if geoLabel == "" {
-		geoLabel = firstNonEmpty(protocol, "Node")
-	}
-	return geoLabel
+	return renameLocation{}
 }
 
-func normalizeProtocolLabel(protocol string) string {
-	protocol = strings.TrimSpace(strings.ToLower(protocol))
-	if protocol == "" {
-		return ""
+func lookupAliasToken(token string, prefixOnly bool) renameLocation {
+	token = normalizeMatchText(token)
+	token = strings.ReplaceAll(token, " ", "")
+	token = renameNumberExpr.ReplaceAllString(token, "")
+	if token == "" {
+		return renameLocation{}
 	}
-	return protocol
-}
-
-func normalizeRemark(remark string) string {
-	remark = strings.TrimSpace(strings.ToValidUTF8(remark, ""))
-	if remark == "" {
-		return ""
-	}
-	remark = html.UnescapeString(remark)
-	for i := 0; i < 2; i++ {
-		if decoded, err := url.QueryUnescape(remark); err == nil && decoded != "" {
-			remark = decoded
+	for _, alias := range renameAliases {
+		for _, kw := range alias.Keywords {
+			candidate := strings.ReplaceAll(strings.ToLower(kw), " ", "")
+			if candidate == "" {
+				continue
+			}
+			if prefixOnly {
+				if token == candidate || strings.HasPrefix(token, candidate) {
+					return renameLocation{Code: alias.Code, Zh: alias.Zh}
+				}
+				continue
+			}
+			if token == candidate {
+				return renameLocation{Code: alias.Code, Zh: alias.Zh}
+			}
 		}
 	}
-	remark = strings.ReplaceAll(remark, "+", " ")
-	remark = strings.ReplaceAll(remark, "\t", " ")
-	remark = strings.ReplaceAll(remark, "\n", " ")
-	remark = strings.ReplaceAll(remark, "\r", " ")
-	remark = renameSeparatorExpr.ReplaceAllString(remark, " · ")
-	remark = strings.ReplaceAll(remark, "- ", "-")
-	remark = strings.ReplaceAll(remark, " -", "-")
-	remark = renameSpaceExpr.ReplaceAllString(remark, " ")
-	remark = strings.Trim(remark, " .·|-_[]{}()<>")
-	return remark
+	return renameLocation{}
 }
 
-func isUsefulRemark(remark string) bool {
-	remark = strings.TrimSpace(remark)
-	if remark == "" {
-		return false
+func inferLocationFromServer(server string) renameLocation {
+	host := strings.ToLower(strings.TrimSpace(extractHost(server)))
+	if host == "" {
+		return renameLocation{}
 	}
-	if renameProfileExpr.MatchString(remark) || renameNoiseExpr.MatchString(remark) {
-		return false
+	if strings.HasSuffix(host, ".hk") {
+		return renameLocation{Code: "HK", Zh: "香港"}
+	}
+	if strings.HasSuffix(host, ".tw") {
+		return renameLocation{Code: "TW", Zh: "台湾"}
+	}
+	if strings.HasSuffix(host, ".jp") {
+		return renameLocation{Code: "JP", Zh: "日本"}
+	}
+	if strings.HasSuffix(host, ".sg") {
+		return renameLocation{Code: "SG", Zh: "新加坡"}
+	}
+	if strings.HasSuffix(host, ".kr") {
+		return renameLocation{Code: "KR", Zh: "韩国"}
+	}
+	if strings.HasSuffix(host, ".us") {
+		return renameLocation{Code: "US", Zh: "美国"}
+	}
+	if strings.HasSuffix(host, ".uk") || strings.HasSuffix(host, ".gb") {
+		return renameLocation{Code: "GB", Zh: "英国"}
 	}
 
-	useful := 0
-	noise := 0
-	for _, r := range remark {
-		switch {
-		case r >= '0' && r <= '9':
-			useful++
-		case r >= 'a' && r <= 'z':
-			useful++
-		case r >= 'A' && r <= 'Z':
-			useful++
-		case r >= 0x4e00 && r <= 0x9fff:
-			useful++
-		case strings.ContainsRune(" ·-_.:%", r):
-		default:
-			noise++
+	tokens := renameSplitExpr.Split(normalizeMatchText(host), -1)
+	for _, token := range tokens {
+		if loc := lookupAliasToken(token, false); loc.Code != "" {
+			return loc
 		}
 	}
-	if useful < 2 {
-		return false
-	}
-	if noise > useful*2 {
-		return false
-	}
-	return true
+	return renameLocation{}
 }
 
-func normalizeHostLabel(server string) string {
+func lookupGeoLocation(ctx context.Context, server string, interval time.Duration) renameLocation {
 	host := extractHost(server)
 	if host == "" {
-		return ""
+		return renameLocation{}
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.String()
+
+	ip := host
+	if parsed := net.ParseIP(host); parsed == nil {
+		resolved := resolvePublicIP(host)
+		if resolved == "" {
+			return renameLocation{}
+		}
+		ip = resolved
 	}
-	host = strings.TrimPrefix(host, "www.")
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return ""
+
+	renameGeoCacheOnce.Do(loadRenameGeoCache)
+
+	renameCacheMu.Lock()
+	if entry, ok := renameGeoCache[ip]; ok && time.Now().Before(entry.ExpiresAt) {
+		renameCacheMu.Unlock()
+		return entry.Info
 	}
-	parts := strings.Split(host, ".")
-	if len(parts) >= 3 {
-		parts = parts[len(parts)-3:]
+	wait := interval - time.Since(renameLastExternal)
+	if wait > 0 {
+		renameCacheMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return renameLocation{}
+		case <-time.After(wait):
+		}
+		renameCacheMu.Lock()
 	}
-	return strings.Join(parts, ".")
+	renameLastExternal = time.Now()
+	renameCacheMu.Unlock()
+
+	lookupCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(lookupCtx, http.MethodGet, fmt.Sprintf("https://ipwho.is/%s", url.PathEscape(ip)), nil)
+	if err != nil {
+		return renameLocation{}
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return renameLocation{}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return renameLocation{}
+	}
+
+	var data struct {
+		Success     bool   `json:"success"`
+		CountryCode string `json:"country_code"`
+		Country     string `json:"country"`
+		Region      string `json:"region"`
+		City        string `json:"city"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return renameLocation{}
+	}
+	if !data.Success {
+		return renameLocation{}
+	}
+
+	code := strings.ToUpper(strings.TrimSpace(data.CountryCode))
+	zh := renameCodeMap[code]
+	if zh == "" {
+		zh = strings.TrimSpace(data.Country)
+	}
+	info := renameLocation{Code: code, Zh: zh}
+	if info.Code == "" || info.Zh == "" {
+		return renameLocation{}
+	}
+
+	renameCacheMu.Lock()
+	renameGeoCache[ip] = renameGeoCacheEntry{Info: info, ExpiresAt: time.Now().Add(12 * time.Hour)}
+	renameCacheMu.Unlock()
+	saveRenameGeoCache()
+	return info
+}
+
+func formatRenameBase(loc renameLocation) string {
+	code := strings.ToUpper(strings.TrimSpace(loc.Code))
+	zh := strings.TrimSpace(loc.Zh)
+	if code == "" {
+		code = "UN"
+	}
+	if zh == "" {
+		zh = renameCodeMap[code]
+	}
+	if zh == "" {
+		zh = "未知"
+	}
+	return fmt.Sprintf("%s%s-%s", flagEmoji(code), code, zh)
+}
+
+func flagEmoji(code string) string {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if len(code) != 2 || code == "UN" {
+		return "🌐"
+	}
+	r1 := rune(code[0])
+	r2 := rune(code[1])
+	if r1 < 'A' || r1 > 'Z' || r2 < 'A' || r2 > 'Z' {
+		return "🌐"
+	}
+	return string([]rune{0x1F1E6 + (r1 - 'A'), 0x1F1E6 + (r2 - 'A')})
+}
+
+func normalizeMatchText(value string) string {
+	value = strings.TrimSpace(strings.ToValidUTF8(value, ""))
+	value = strings.ToLower(value)
+	value = strings.ReplaceAll(value, "+", " ")
+	value = strings.ReplaceAll(value, "_", " ")
+	value = strings.ReplaceAll(value, "-", " ")
+	value = renamePortExpr.ReplaceAllString(value, "")
+	value = renameCleanExpr.ReplaceAllString(value, " ")
+	value = renameSpaceExpr.ReplaceAllString(value, " ")
+	return strings.TrimSpace(value)
 }
 
 func extractHost(server string) string {
@@ -252,101 +428,15 @@ func extractHost(server string) string {
 	if ip := net.ParseIP(server); ip != nil {
 		return ip.String()
 	}
+	if renameIPv4Expr.MatchString(server) {
+		return server
+	}
 	if idx := strings.LastIndex(server, ":"); idx > 0 && !strings.Contains(server[idx+1:], ":") {
 		if _, err := strconv.Atoi(server[idx+1:]); err == nil {
 			return server[:idx]
 		}
 	}
 	return server
-}
-
-func lookupGeoLabel(ctx context.Context, server string, interval time.Duration) string {
-	host := extractHost(server)
-	if host == "" {
-		return ""
-	}
-
-	ip := host
-	if parsed := net.ParseIP(host); parsed == nil {
-		resolved := resolvePublicIP(host)
-		if resolved == "" {
-			return ""
-		}
-		ip = resolved
-	}
-
-	renameGeoCacheOnce.Do(loadRenameGeoCache)
-
-	renameCacheMu.Lock()
-	if entry, ok := renameGeoCache[ip]; ok && time.Now().Before(entry.ExpiresAt) {
-		renameCacheMu.Unlock()
-		return entry.Label
-	}
-	wait := interval - time.Since(renameLastExternal)
-	if wait > 0 {
-		renameCacheMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ""
-		case <-time.After(wait):
-		}
-		renameCacheMu.Lock()
-	}
-	renameLastExternal = time.Now()
-	renameCacheMu.Unlock()
-
-	lookupCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(lookupCtx, http.MethodGet, fmt.Sprintf("https://ipwho.is/%s", url.PathEscape(ip)), nil)
-	if err != nil {
-		return ""
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-
-	var data struct {
-		Success     bool   `json:"success"`
-		CountryCode string `json:"country_code"`
-		Country     string `json:"country"`
-		Region      string `json:"region"`
-		City        string `json:"city"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return ""
-	}
-	if !data.Success {
-		return ""
-	}
-
-	parts := []string{}
-	if data.CountryCode != "" {
-		parts = append(parts, strings.ToUpper(strings.TrimSpace(data.CountryCode)))
-	} else if data.Country != "" {
-		parts = append(parts, strings.TrimSpace(data.Country))
-	}
-	if data.City != "" {
-		parts = append(parts, strings.TrimSpace(data.City))
-	} else if data.Region != "" {
-		parts = append(parts, strings.TrimSpace(data.Region))
-	}
-	label := strings.TrimSpace(strings.Join(parts, "-"))
-	if label == "" {
-		return ""
-	}
-
-	renameCacheMu.Lock()
-	renameGeoCache[ip] = renameGeoCacheEntry{Label: label, ExpiresAt: time.Now().Add(12 * time.Hour)}
-	renameCacheMu.Unlock()
-	saveRenameGeoCache()
-	return label
 }
 
 func resolvePublicIP(host string) string {
@@ -399,13 +489,4 @@ func saveRenameGeoCache() {
 		return
 	}
 	_ = os.WriteFile(renameCacheFilePath(), data, 0o644)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
