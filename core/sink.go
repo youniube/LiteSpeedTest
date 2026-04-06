@@ -13,21 +13,21 @@ import (
 	"github.com/xxf098/lite-proxy/utils"
 )
 
-func createSink(ctx context.Context, c Config) (tunnel.Client, error) {
-	if engine.NeedExternalEngine(c.Engine, c.Link) {
+func createSink(ctx context.Context, o Options) (tunnel.Client, error) {
+	if engine.NeedExternalEngine(o.Engine, o.Link) {
 		return createExternalEngineSink(ctx, c)
 	}
 	return createInternalSink(ctx, c)
 }
 
-func createExternalEngineSink(ctx context.Context, c Config) (tunnel.Client, error) {
-	runner := singbox.New(c.SingboxBin, c.SingboxWorkDir)
-	lp, err := runner.Start(ctx, c.Link, engine.StartOptions{
-		SingboxBin:   c.SingboxBin,
-		WorkDir:      c.SingboxWorkDir,
+func createExternalEngineSink(ctx context.Context, o Options) (tunnel.Client, error) {
+	runner := singbox.New(o.SingboxBin, o.SingboxWorkDir)
+	lp, err := runner.Start(ctx, o.Link, engine.StartOptions{
+		SingboxBin:   o.SingboxBin,
+		WorkDir:      o.SingboxWorkDir,
 		LogLevel:     "warn",
 		StartupWait:  5 * time.Second,
-		KeepTempFile: c.KeepTempFile,
+		KeepTempFile: o.KeepTempFile,
 	})
 	if err != nil {
 		return nil, err
@@ -41,8 +41,8 @@ func createExternalEngineSink(ctx context.Context, c Config) (tunnel.Client, err
 	return proxy.NewLocalSocksClient(ctx, lp.SOCKSAddr), nil
 }
 
-func createInternalSink(ctx context.Context, c Config) (tunnel.Client, error) {
-	matches, err := utils.CheckLink(c.Link)
+func createInternalSink(ctx context.Context, o Options) (tunnel.Client, error) {
+	matches, err := utils.CheckLink(o.Link)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +52,7 @@ func createInternalSink(ctx context.Context, c Config) (tunnel.Client, error) {
 		return nil, err
 	}
 
-	d, err := creator(c.Link)
+	d, err := creator(o.Link)
 	if err != nil {
 		return nil, err
 	}

@@ -1,12 +1,5 @@
 package core
 
-type Config struct {
-	LocalHost      string
-	LocalPort      int
-	Link           string
-	Ping           int
-	Engine         string
-	SingboxBin     string
-	SingboxWorkDir string
-	KeepTempFile   bool
-}
+// Config is kept as a compatibility alias for legacy callers.
+// New code should prefer Options to make its runtime-startup role explicit.
+type Config = Options

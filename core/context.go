@@ -9,10 +9,10 @@ import (
 	"github.com/xxf098/lite-proxy/tunnel/socks"
 )
 
-func newInstanceContext(c Config) (context.Context, context.CancelFunc) {
+func newInstanceContext(o Options) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx = context.WithValue(ctx, "LocalHost", c.LocalHost)
-	ctx = context.WithValue(ctx, "LocalPort", c.LocalPort)
+	ctx = context.WithValue(ctx, "LocalHost", o.LocalHost)
+	ctx = context.WithValue(ctx, "LocalPort", o.LocalPort)
 	return ctx, cancel
 }
 

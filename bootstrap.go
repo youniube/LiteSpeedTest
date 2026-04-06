@@ -94,7 +94,7 @@ func runWebMode() error {
 }
 
 func runInstanceMode(link string) error {
-	p, err := core.StartInstance(buildCoreConfig(link))
+	p, err := core.StartInstance(buildCoreOptions(link))
 	if err != nil {
 		return err
 	}
@@ -102,8 +102,8 @@ func runInstanceMode(link string) error {
 	return p.Run()
 }
 
-func buildCoreConfig(link string) core.Config {
-	return core.Config{
+func buildCoreOptions(link string) core.Options {
+	return core.Options{
 		LocalHost:      "0.0.0.0",
 		LocalPort:      *port,
 		Link:           link,
