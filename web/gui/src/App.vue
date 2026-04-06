@@ -156,11 +156,11 @@
                                             <el-dropdown-item @click.native="handleCopySub()">复制订阅链接</el-dropdown-item>
                                             <el-dropdown-item v-if="!loading && result.length" @click.native="handleCopyAvailable()">复制可用节点</el-dropdown-item>
                                             <el-dropdown-item v-if="!loading && result.length" @click.native="handleSmartRename()">重命名节点</el-dropdown-item>
-                                            <el-dropdown-item v-if="multipleSelection.length" @click.native="handleCopy()">复制节点</el-dropdown-item>
-                                            <el-dropdown-item v-if="multipleSelection.length" @click.native="handleSave()">导出节点</el-dropdown-item>
+                                            <el-dropdown-item v-if="selectedNodes.length" @click.native="handleCopy()">复制节点</el-dropdown-item>
+                                            <el-dropdown-item v-if="selectedNodes.length" @click.native="handleSave()">导出节点</el-dropdown-item>
                                             <!-- <el-dropdown-item @click.native="handleRetest()">重新测试</el-dropdown-item> -->
-                                            <el-dropdown-item v-if="multipleSelection.length" @click.native="handleQRCode()">显示二维码</el-dropdown-item>
-                                            <el-dropdown-item v-if="multipleSelection.length" @click.native="handleExportResult()">导出结果</el-dropdown-item>
+                                            <el-dropdown-item v-if="selectedNodes.length" @click.native="handleQRCode()">显示二维码</el-dropdown-item>
+                                            <el-dropdown-item v-if="selectedNodes.length" @click.native="handleExportResult()">导出结果</el-dropdown-item>
                                         </el-dropdown-menu>
                                     </template>
                                 </el-dropdown>
@@ -292,7 +292,7 @@
         @opened="handleQRCodeCreate" :before-close="qrCodeHandleClose">
         <el-scrollbar style="height:360px;">
             <el-row>
-                <el-col v-for="(item, index) of multipleSelection" :key="index" :span="12">
+                <el-col v-for="(item, index) of selectedNodes" :key="index" :span="12">
                     <el-card :body-style="{ padding: '0px', height:'400px'}" shadow="hover"
                         style="width: 320px;height: 330px;text-align: center;">
                         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; margin-top: 15px;">
@@ -377,6 +377,7 @@ export default {
             picdata: "",
             option: 0,
             multipleSelection: [],
+            selectedNodeIds: [],
             qrCodeDialogVisible: false,
             totalTraffic: 0,
             totalTime: 0,
@@ -434,6 +435,11 @@ export default {
     },
     components: {
         'ag-grid-vue': AgGridVue
+    },
+    computed: {
+        selectedNodes() {
+            return this.getSelectedNodes();
+        },
     },
     created() {        
         this.columns = Object.freeze([
@@ -517,8 +523,16 @@ export default {
             // this.gridColumnApi = params.columnApi;
         },
         onSelectionChanged() {
-            const selectedRows = this.gridApi.getSelectedRows();
-            this.multipleSelection = selectedRows;
+            const selectedRows = this.gridApi ? this.gridApi.getSelectedRows() : [];
+            this.selectedNodeIds = selectedRows.map(item => item.id);
+            this.multipleSelection = this.getSelectedNodes();
+        },
+        getSelectedNodes() {
+            if (!Array.isArray(this.selectedNodeIds) || !this.selectedNodeIds.length) {
+                return [];
+            }
+            const selectedIds = new Set(this.selectedNodeIds);
+            return this.result.filter(item => item && selectedIds.has(item.id));
         },
         normalizeBase64(input) {
             const normalized = `${input || ""}`.replace(/-/g, '+').replace(/_/g, '/').replace(/\s+/g, '');
@@ -599,11 +613,25 @@ export default {
             }
         },
         syncSelectionWithResult() {
-            if (!Array.isArray(this.multipleSelection) || !this.multipleSelection.length) {
+            if (!Array.isArray(this.selectedNodeIds) || !this.selectedNodeIds.length) {
+                this.multipleSelection = [];
                 return;
             }
-            const selectedIds = new Set(this.multipleSelection.map(item => item.id));
-            this.multipleSelection = this.result.filter(item => item && selectedIds.has(item.id));
+            const validIds = new Set(this.result.filter(item => !!item).map(item => item.id));
+            this.selectedNodeIds = this.selectedNodeIds.filter(id => validIds.has(id));
+            this.multipleSelection = this.getSelectedNodes();
+            if (this.gridApi) {
+                this.gridApi.forEachNode(node => {
+                    node.setSelected(this.selectedNodeIds.includes(node.data.id));
+                });
+            }
+        },
+        clearSelectionState() {
+            this.selectedNodeIds = [];
+            this.multipleSelection = [];
+            if (this.gridApi) {
+                this.gridApi.deselectAll();
+            }
         },
         buildRenderResultPayload() {
             const nodes = this.result.filter(item => !!item).map(item => {
@@ -827,6 +855,7 @@ export default {
                 // this.$refs.result.clearSelection();
                 // this.$refs.result.clearFilter();
                 // this.$refs.result.clearSort();
+                this.clearSelectionState();
                 this.setAutoHeight()
                 this.loading = true;
                 this.totalTraffic = 0;
@@ -847,11 +876,13 @@ export default {
             this.loading = false;
             this.loadingContent = "等待后端响应……";
             this.result = [];
+            this.clearSelectionState();
             this.disconnect();
         },
         handleSelectionChange(val) {
             // console.log(`select: ${JSON.stringify(val)}`)
-            this.multipleSelection = val;
+            this.selectedNodeIds = Array.isArray(val) ? val.map(item => item.id) : [];
+            this.multipleSelection = this.getSelectedNodes();
         },
         handleSortChange(val) {
             if (val.prop === "ping") { 
@@ -915,7 +946,7 @@ export default {
         },
         handleCopy: async function () {
             try {
-                const links = this.multipleSelection.map(elem => this.rewriteLinkRemark(elem.link, elem.remark)).join("\n")
+                const links = this.getSelectedNodes().map(elem => this.buildNodeLink(elem)).join("\n")
                 await this.copyToClipboard(links)
                 this.$message.success("Copy link succeed!");
             } catch (err) {
@@ -933,8 +964,11 @@ export default {
         },
         qrCodeHandleClose() {
             this.qrCodeDialogVisible = false;
-            this.multipleSelection.forEach(item => {
-                document.getElementById('qrcode_' + item.id).innerHTML = '';
+            this.getSelectedNodes().forEach(item => {
+                const el = document.getElementById('qrcode_' + item.id);
+                if (el) {
+                    el.innerHTML = '';
+                }
             });
         },
         handleQRCode() {
@@ -942,7 +976,7 @@ export default {
         },
         handleQRCodeCreate: function () {
             this.$nextTick(() => {
-                const items = this.multipleSelection.map(item => {
+                const items = this.getSelectedNodes().map(item => {
                     return {
                         gid: 'qrcode_' + item.id,
                         link: this.buildNodeLink(item),
@@ -958,8 +992,9 @@ export default {
         },
         handleRetest: function () {
             // const data = { testid: id, testMode: 3, links: [link], ...this.getJSONOptions() }
-            const testids = this.multipleSelection.map(elem => elem.id)
-            const links = this.multipleSelection.map(elem => this.buildNodeLink(elem))
+            const selectedNodes = this.getSelectedNodes()
+            const testids = selectedNodes.map(elem => elem.id)
+            const links = selectedNodes.map(elem => this.buildNodeLink(elem))
             const data = { testMode: 3, ...this.getJSONOptions(), testids, links }
             // this.$refs.result.clearSelection();
             // this.$refs.result.clearFilter();
