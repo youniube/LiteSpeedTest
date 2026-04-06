@@ -15,9 +15,9 @@ import (
 
 func createSink(ctx context.Context, o Options) (tunnel.Client, error) {
 	if engine.NeedExternalEngine(o.Engine, o.Link) {
-		return createExternalEngineSink(ctx, c)
+		return createExternalEngineSink(ctx, o)
 	}
-	return createInternalSink(ctx, c)
+	return createInternalSink(ctx, o)
 }
 
 func createExternalEngineSink(ctx context.Context, o Options) (tunnel.Client, error) {
