@@ -181,6 +181,8 @@
                                         :defaultColDef="defaultColDef"
                                         @grid-ready="onGridReady"
                                         @selection-changed="onSelectionChanged"
+                                        @sort-changed="scheduleDerivedStateSync"
+                                        @filter-changed="scheduleDerivedStateSync"
                                     >
                                 </ag-grid-vue>
                         </el-container>
@@ -391,6 +393,7 @@ export default {
             renameUseExternal: true,
             renameIntervalMs: 1200,
             sortState: {},
+            resultSyncTimer: null,
             // agGrid
             columns: this.columns,
             gridApi: null,
@@ -440,6 +443,39 @@ export default {
         selectedNodes() {
             return this.getSelectedNodes();
         },
+    },
+    watch: {
+        result: {
+            deep: true,
+            handler() {
+                this.scheduleDerivedStateSync();
+            },
+        },
+        totalTraffic() {
+            this.scheduleDerivedStateSync();
+        },
+        totalTime() {
+            this.scheduleDerivedStateSync();
+        },
+        language() {
+            this.scheduleDerivedStateSync();
+        },
+        fontSize() {
+            this.scheduleDerivedStateSync();
+        },
+        theme() {
+            this.scheduleDerivedStateSync();
+        },
+        sortMethod() {
+            this.scheduleDerivedStateSync();
+        },
+    },
+    beforeUnmount() {
+        if (this.resultSyncTimer) {
+            clearTimeout(this.resultSyncTimer);
+            this.resultSyncTimer = null;
+        }
+        this.disconnect();
     },
     created() {        
         this.columns = Object.freeze([
@@ -520,6 +556,7 @@ export default {
         },
         onGridReady(params) {
             this.gridApi = params.api;
+            this.scheduleDerivedStateSync();
             // this.gridColumnApi = params.columnApi;
         },
         onSelectionChanged() {
@@ -612,19 +649,57 @@ export default {
                     return this.replaceHashRemark(trimmed, nextRemark);
             }
         },
+        getResultItems() {
+            return this.result.filter(item => !!item);
+        },
+        getRenderableResultItems() {
+            if (this.gridApi) {
+                const items = [];
+                this.gridApi.forEachNodeAfterFilterAndSort(node => {
+                    if (node && node.data) {
+                        items.push(node.data);
+                    }
+                });
+                return items;
+            }
+            return this.getResultItems();
+        },
         syncSelectionWithResult() {
             if (!Array.isArray(this.selectedNodeIds) || !this.selectedNodeIds.length) {
                 this.multipleSelection = [];
                 return;
             }
-            const validIds = new Set(this.result.filter(item => !!item).map(item => item.id));
+            const validIds = new Set(this.getResultItems().map(item => item.id));
             this.selectedNodeIds = this.selectedNodeIds.filter(id => validIds.has(id));
             this.multipleSelection = this.getSelectedNodes();
             if (this.gridApi) {
                 this.gridApi.forEachNode(node => {
+                    if (!node || !node.data) {
+                        return;
+                    }
                     node.setSelected(this.selectedNodeIds.includes(node.data.id));
                 });
             }
+        },
+        scheduleDerivedStateSync() {
+            if (this.resultSyncTimer) {
+                clearTimeout(this.resultSyncTimer);
+            }
+            this.resultSyncTimer = window.setTimeout(() => {
+                this.resultSyncTimer = null;
+                this.syncSelectionWithResult();
+                this.syncGenerateResultJSONFromCurrentResult();
+            }, 60);
+        },
+        syncGenerateResultJSONFromCurrentResult() {
+            const items = this.getResultItems();
+            if (!items.length) {
+                this.generateResultJSON = '';
+                return null;
+            }
+            const data = this.buildRenderResultPayload();
+            this.generateResultJSON = JSON.stringify(data, null, 2);
+            return data;
         },
         clearSelectionState() {
             this.selectedNodeIds = [];
@@ -633,8 +708,16 @@ export default {
                 this.gridApi.deselectAll();
             }
         },
+        clearDerivedResultState() {
+            if (this.resultSyncTimer) {
+                clearTimeout(this.resultSyncTimer);
+                this.resultSyncTimer = null;
+            }
+            this.picdata = '';
+            this.generateResultJSON = '';
+        },
         buildRenderResultPayload() {
-            const nodes = this.result.filter(item => !!item).map(item => {
+            const nodes = this.getRenderableResultItems().map(item => {
                 const avg_speed = Math.floor(this.getSpeed(item.speed)) || 0;
                 const max_speed = Math.floor(this.getSpeed(item.maxspeed)) || 0;
                 return {
@@ -648,7 +731,7 @@ export default {
                     isok: this.nodeAvailable(item),
                 };
             });
-            const data = {
+            return {
                 totalTraffic: this.bytesToSize(this.totalTraffic),
                 totalTime: this.formatSeconds(this.totalTime),
                 language: this.language,
@@ -657,24 +740,32 @@ export default {
                 sortMethod: this.sortMethod,
                 nodes,
             };
-            this.generateResultJSON = JSON.stringify(data);
-            return data;
         },
-        async refreshResultImageFromCurrentResult() {
-            const data = this.buildRenderResultPayload();
-            if (!data.nodes.length) {
-                this.picdata = '';
-                return;
-            }
+        async requestResultImage(payload) {
             const resp = await fetch(this.apiPath(API_ROUTES.generateResult), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data),
+                body: JSON.stringify(payload),
             });
             if (!resp.ok) {
                 throw new Error(await resp.text());
             }
             this.picdata = await resp.text();
+        },
+        parseManualResultPayload() {
+            const raw = `${this.generateResultJSON || ''}`.trim();
+            if (!raw.length) {
+                throw new Error('结果数据为空');
+            }
+            return JSON.parse(raw);
+        },
+        async refreshResultImageFromCurrentResult() {
+            const data = this.syncGenerateResultJSONFromCurrentResult();
+            if (!data || !data.nodes.length) {
+                this.picdata = '';
+                return;
+            }
+            await this.requestResultImage(data);
         },
         applyRenamedNodes(nodes) {
             if (!Array.isArray(nodes) || !nodes.length) {
@@ -699,7 +790,7 @@ export default {
                 this.gridApi.applyTransaction({ update: updates });
             }
             this.syncSelectionWithResult();
-            this.buildRenderResultPayload();
+            this.scheduleDerivedStateSync();
         },
         async handleSmartRename(showNotice = true) {
             if (!Array.isArray(this.result) || !this.result.length) {
@@ -860,23 +951,28 @@ export default {
                 this.loading = true;
                 this.totalTraffic = 0;
                 this.totalTime = 0;
-                this.picdata = "";
+                this.clearDerivedResultState();
                 this.result = [];
                 this.incrTotalTime()
                 this.loadingContent = "等待后端响应……";
                 this.starttest();
             }
         },
-        generateResult: function (params) {
-            this.refreshResultImageFromCurrentResult().catch(err => {
-                this.$message.error(`Generate result failed: ${err}`);
-            });
+        generateResult: function () {
+            Promise.resolve()
+                .then(() => this.option === 3
+                    ? this.requestResultImage(this.parseManualResultPayload())
+                    : this.refreshResultImageFromCurrentResult())
+                .catch(err => {
+                    this.$message.error(`Generate result failed: ${err}`);
+                });
         },
         terminate: function () {
             this.loading = false;
             this.loadingContent = "等待后端响应……";
             this.result = [];
             this.clearSelectionState();
+            this.clearDerivedResultState();
             this.disconnect();
         },
         handleSelectionChange(val) {
@@ -955,7 +1051,7 @@ export default {
         },
         handleCopyAvailable: async function () {
             try {
-                const links = this.result.filter(elem => this.nodeAvailable(elem)).map(elem => this.rewriteLinkRemark(elem.link, elem.remark))
+                const links = this.result.filter(elem => this.nodeAvailable(elem)).map(elem => this.buildNodeLink(elem))
                 await this.copyToClipboard(links.join("\n"))
                 this.$message.success(`Copy ${links.length} link${links.length>1 ? "s" : ""} succeed!`);
             } catch (err) {
@@ -1028,7 +1124,7 @@ export default {
             this.dashboardCollapsed = !this.dashboardCollapsed
         },
         handleSave: function () {
-            const links = this.multipleSelection.map(elem => {
+            const links = this.getSelectedNodes().map(elem => {
                     const link = this.rewriteLinkRemark(elem.link, elem.remark);
                     return `# ${elem.remark}\t${elem.ping}\t${elem.speed}\t${elem.maxspeed}\n${link}`
             })
