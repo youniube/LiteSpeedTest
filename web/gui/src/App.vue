@@ -346,6 +346,12 @@ let themes = {
 }
 
 let ws = null
+const API_ROUTES = Object.freeze({
+    test: "/test",
+    getSubscriptionLink: "/getSubscriptionLink",
+    generateResult: "/generateResult",
+    renameNodes: "/renameNodes",
+})
 
 export default {
     data() {
@@ -529,6 +535,19 @@ export default {
         encodeBase64Unicode(input) {
             return window.btoa(unescape(encodeURIComponent(`${input || ''}`)));
         },
+        apiPath(path) {
+            return `${path}`;
+        },
+        wsURL(path) {
+            const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+            return `${scheme}://${window.location.host}${path}`;
+        },
+        buildNodeLink(item) {
+            if (!item) {
+                return "";
+            }
+            return this.rewriteLinkRemark(item.link, item.remark);
+        },
         replaceHashRemark(link, remark) {
             const trimmed = `${link || ''}`.trim();
             if (!trimmed || !remark) {
@@ -619,7 +638,7 @@ export default {
                 this.picdata = '';
                 return;
             }
-            const resp = await fetch('/generateResult', {
+            const resp = await fetch(this.apiPath(API_ROUTES.generateResult), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data),
@@ -672,7 +691,7 @@ export default {
                     })),
             };
             try {
-                const resp = await fetch('/renameNodes', {
+                const resp = await fetch(this.apiPath(API_ROUTES.renameNodes), {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -877,7 +896,7 @@ export default {
             }
             const host = window.location.host;
             if (host.startsWith("127.0.0.1")) {
-                const url = `${window.location.protocol}//${window.location.host}/getSubscriptionLink`
+                const url = `${window.location.protocol}//${window.location.host}${this.apiPath(API_ROUTES.getSubscriptionLink)}`
                 const groupname = this.groupname.trim() || "Default"
                 const requestOptions = {
                     method: "POST",
@@ -926,7 +945,7 @@ export default {
                 const items = this.multipleSelection.map(item => {
                     return {
                         gid: 'qrcode_' + item.id,
-                        link: item.link,
+                        link: this.buildNodeLink(item),
                         size: 260
                     }
                 })
@@ -940,7 +959,7 @@ export default {
         handleRetest: function () {
             // const data = { testid: id, testMode: 3, links: [link], ...this.getJSONOptions() }
             const testids = this.multipleSelection.map(elem => elem.id)
-            const links = this.multipleSelection.map(elem => elem.link)
+            const links = this.multipleSelection.map(elem => this.buildNodeLink(elem))
             const data = { testMode: 3, ...this.getJSONOptions(), testids, links }
             // this.$refs.result.clearSelection();
             // this.$refs.result.clearFilter();
@@ -1131,7 +1150,7 @@ export default {
             let self = this;
             let groupstr = self.groupname == "" ? "?empty?" : self.groupname;
             this.result = [];
-            this.connect(`ws://${window.location.host}/test`);
+            this.connect(this.wsURL(API_ROUTES.test));
             if (ws) {
                 ws.addEventListener("open", function (ev) {
                     const data = self.getJSONOptions()
