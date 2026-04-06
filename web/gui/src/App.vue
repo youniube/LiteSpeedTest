@@ -514,6 +514,121 @@ export default {
             const selectedRows = this.gridApi.getSelectedRows();
             this.multipleSelection = selectedRows;
         },
+        normalizeBase64(input) {
+            const normalized = `${input || ""}`.replace(/-/g, '+').replace(/_/g, '/').replace(/\s+/g, '');
+            const padding = normalized.length % 4;
+            return padding ? normalized + '='.repeat(4 - padding) : normalized;
+        },
+        decodeBase64Unicode(input) {
+            try {
+                return decodeURIComponent(escape(window.atob(this.normalizeBase64(input))));
+            } catch (_) {
+                return window.atob(this.normalizeBase64(input));
+            }
+        },
+        encodeBase64Unicode(input) {
+            return window.btoa(unescape(encodeURIComponent(`${input || ''}`)));
+        },
+        replaceHashRemark(link, remark) {
+            const trimmed = `${link || ''}`.trim();
+            if (!trimmed || !remark) {
+                return trimmed;
+            }
+            const base = trimmed.includes('#') ? trimmed.slice(0, trimmed.indexOf('#')) : trimmed;
+            return `${base}#${encodeURIComponent(remark)}`;
+        },
+        rewriteVmessRemark(link, remark) {
+            const trimmed = `${link || ''}`.trim();
+            if (!trimmed || !remark) {
+                return trimmed;
+            }
+            const match = trimmed.match(/^vmess:\/\/([^#\s]+)(?:#.*)?$/i);
+            if (!match) {
+                return this.replaceHashRemark(trimmed, remark);
+            }
+            const payload = match[1];
+            if (payload.includes('@')) {
+                return this.replaceHashRemark(trimmed, remark);
+            }
+            try {
+                const raw = this.decodeBase64Unicode(payload);
+                const cfg = JSON.parse(raw);
+                cfg.ps = remark;
+                const encoded = this.encodeBase64Unicode(JSON.stringify(cfg));
+                return `vmess://${encoded}#${encodeURIComponent(remark)}`;
+            } catch (_) {
+                return this.replaceHashRemark(trimmed, remark);
+            }
+        },
+        rewriteLinkRemark(link, remark) {
+            const trimmed = `${link || ''}`.trim();
+            const nextRemark = `${remark || ''}`.trim();
+            if (!trimmed || !nextRemark) {
+                return trimmed;
+            }
+            const scheme = trimmed.split('://', 1)[0].toLowerCase();
+            switch (scheme) {
+                case 'vmess':
+                    return this.rewriteVmessRemark(trimmed, nextRemark);
+                case 'vless':
+                case 'trojan':
+                case 'ss':
+                case 'http':
+                    return this.replaceHashRemark(trimmed, nextRemark);
+                default:
+                    return this.replaceHashRemark(trimmed, nextRemark);
+            }
+        },
+        syncSelectionWithResult() {
+            if (!Array.isArray(this.multipleSelection) || !this.multipleSelection.length) {
+                return;
+            }
+            const selectedIds = new Set(this.multipleSelection.map(item => item.id));
+            this.multipleSelection = this.result.filter(item => item && selectedIds.has(item.id));
+        },
+        buildRenderResultPayload() {
+            const nodes = this.result.filter(item => !!item).map(item => {
+                const avg_speed = Math.floor(this.getSpeed(item.speed)) || 0;
+                const max_speed = Math.floor(this.getSpeed(item.maxspeed)) || 0;
+                return {
+                    id: item.id,
+                    group: item.group,
+                    remarks: item.remark,
+                    protocol: item.protocol,
+                    ping: `${item.ping}`,
+                    avg_speed,
+                    max_speed,
+                    isok: this.nodeAvailable(item),
+                };
+            });
+            const data = {
+                totalTraffic: this.bytesToSize(this.totalTraffic),
+                totalTime: this.formatSeconds(this.totalTime),
+                language: this.language,
+                fontSize: this.fontSize,
+                theme: this.theme,
+                sortMethod: this.sortMethod,
+                nodes,
+            };
+            this.generateResultJSON = JSON.stringify(data);
+            return data;
+        },
+        async refreshResultImageFromCurrentResult() {
+            const data = this.buildRenderResultPayload();
+            if (!data.nodes.length) {
+                this.picdata = '';
+                return;
+            }
+            const resp = await fetch('/generateResult', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
+            if (!resp.ok) {
+                throw new Error(await resp.text());
+            }
+            this.picdata = await resp.text();
+        },
         applyRenamedNodes(nodes) {
             if (!Array.isArray(nodes) || !nodes.length) {
                 return;
@@ -524,13 +639,20 @@ export default {
                 if (!current) {
                     return;
                 }
-                const next = { ...current, remark: node.remark || current.remark };
+                const nextRemark = node.remark || current.remark;
+                const next = {
+                    ...current,
+                    remark: nextRemark,
+                    link: this.rewriteLinkRemark(node.link || current.link, nextRemark),
+                };
                 this.result[node.id] = next;
                 updates.push(next);
             });
             if (updates.length && this.gridApi) {
                 this.gridApi.applyTransaction({ update: updates });
             }
+            this.syncSelectionWithResult();
+            this.buildRenderResultPayload();
         },
         async handleSmartRename(showNotice = true) {
             if (!Array.isArray(this.result) || !this.result.length) {
@@ -562,6 +684,7 @@ export default {
                 }
                 const data = await resp.json();
                 this.applyRenamedNodes(data.nodes || []);
+                await this.refreshResultImageFromCurrentResult();
                 if (showNotice) {
                     this.$notify.success('节点重命名完成');
                 }
@@ -697,20 +820,9 @@ export default {
             }
         },
         generateResult: function (params) {
-            if (!this.generateResultJSON) {
-                return
-            }
-            const requestOptions = {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: this.generateResultJSON
-            };
-            const url = `${window.location.protocol}//${window.location.host}/generateResult`
-            fetch(url, requestOptions)
-                .then(resp => resp.text())
-                .then(data => {
-                    this.picdata = data
-                })
+            this.refreshResultImageFromCurrentResult().catch(err => {
+                this.$message.error(`Generate result failed: ${err}`);
+            });
         },
         terminate: function () {
             this.loading = false;
@@ -784,7 +896,7 @@ export default {
         },
         handleCopy: async function () {
             try {
-                const links = this.multipleSelection.map(elem => elem.link).join("\n")
+                const links = this.multipleSelection.map(elem => this.rewriteLinkRemark(elem.link, elem.remark)).join("\n")
                 await this.copyToClipboard(links)
                 this.$message.success("Copy link succeed!");
             } catch (err) {
@@ -793,7 +905,7 @@ export default {
         },
         handleCopyAvailable: async function () {
             try {
-                const links = this.result.filter(elem => elem.ping > 0).map(elem => elem.link)
+                const links = this.result.filter(elem => this.nodeAvailable(elem)).map(elem => this.rewriteLinkRemark(elem.link, elem.remark))
                 await this.copyToClipboard(links.join("\n"))
                 this.$message.success(`Copy ${links.length} link${links.length>1 ? "s" : ""} succeed!`);
             } catch (err) {
@@ -863,7 +975,8 @@ export default {
         },
         handleSave: function () {
             const links = this.multipleSelection.map(elem => {
-                    return `# ${elem.remark}\t${elem.ping}\t${elem.speed}\t${elem.maxspeed}\n${elem.link}`
+                    const link = this.rewriteLinkRemark(elem.link, elem.remark);
+                    return `# ${elem.remark}\t${elem.ping}\t${elem.speed}\t${elem.maxspeed}\n${link}`
             })
             if (this.subscription.match(/^https?:\/\//g)) {
                 links.unshift(`# ${this.subscription}`)
@@ -871,29 +984,7 @@ export default {
             this.saveData(links.join("\n"), "profile")
         },
         handleExportResult: function (params) {
-            const nodes = this.result.map(item => {
-                const avg_speed = Math.floor(this.getSpeed(item.speed)) || 0
-                const max_speed = Math.floor(this.getSpeed(item.maxspeed)) || 0
-                return {
-                    id: item.id,
-                    group: item.group,
-                    remarks: item.remark,
-                    protocol: item.protocol,
-                    ping: `${item.ping}`,
-                    avg_speed,
-                    max_speed,
-                    isok: item.ping > 0,
-                }
-            })
-            const data = {
-                totalTraffic: this.bytesToSize(this.totalTraffic),
-                totalTime: this.formatSeconds(this.totalTime),
-                language: this.language,
-                fontSize: this.fontSize,
-                theme: this.theme,
-                sortMethod: this.sortMethod,
-                nodes,
-            }
+            const data = this.buildRenderResultPayload();
             this.saveData(JSON.stringify(data, null, 2), "result")
         },
         colorCell: function ({
