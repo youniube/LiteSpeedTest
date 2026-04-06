@@ -1,0 +1,221 @@
+--- a/main.go
++++ b/main.go
+@@ -2,19 +2,7 @@
+ 
+ import (
+ 	"flag"
+-	"fmt"
+ 	"log"
+-	"os"
+-	"os/signal"
+-	"runtime"
+-	"strings"
+-	"syscall"
+-
+-	grpcServer "github.com/xxf098/lite-proxy/api/rpc/liteserver"
+-	C "github.com/xxf098/lite-proxy/constant"
+-	"github.com/xxf098/lite-proxy/core"
+-	"github.com/xxf098/lite-proxy/utils"
+-	webServer "github.com/xxf098/lite-proxy/web"
+ )
+ 
+ var (
+@@ -32,67 +20,7 @@
+ 
+ func main() {
+ 	flag.Parse()
+-	if *version {
+-		fmt.Printf("LiteSpeedTest %s %s %s with %s %s\n", C.Version, runtime.GOOS, runtime.GOARCH, runtime.Version(), C.BuildTime)
+-		return
+-	}
+-
+-	link := ""
+-	for _, arg := range os.Args {
+-		if strings.HasPrefix(arg, "-") {
+-			continue
+-		}
+-		if _, err := utils.CheckLink(arg); err == nil {
+-			link = arg
+-			break
+-		}
+-	}
+-
+-	if *test != "" {
+-		if err := webServer.TestFromCMD(*test, conf); err != nil {
+-			log.Fatal(err)
+-		}
+-		return
+-	}
+-
+-	if *grpc {
+-		if err := grpcServer.StartServer(uint16(*port)); err != nil {
+-			log.Fatalln(err)
+-		}
+-		return
+-	}
+-
+-	if link == "" {
+-		if len(os.Args) < 2 {
+-			*port = 10888
+-		}
+-		if err := webServer.ServeFile(*port); err != nil {
+-			log.Fatalln(err)
+-		}
+-		return
+-	}
+-
+-	c := core.Config{
+-		LocalHost:      "0.0.0.0",
+-		LocalPort:      *port,
+-		Link:           link,
+-		Ping:           *ping,
+-		Engine:         *engineName,
+-		SingboxBin:     *singboxBin,
+-		SingboxWorkDir: *singboxWorkDir,
+-		KeepTempFile:   *keepTemp,
+-	}
+-	p, err := core.StartInstance(c)
+-	if err != nil {
++	if err := run(); err != nil {
+ 		log.Fatalln(err)
+ 	}
+-
+-	sigs := make(chan os.Signal, 1)
+-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+-	defer signal.Stop(sigs)
+-	go func() {
+-		<-sigs
+-		p.Close()
+-	}()
+-	p.Run()
+ }
+
+--- /dev/null
++++ b/bootstrap.go
+@@ -0,0 +1,126 @@
++package main
++
++import (
++	"fmt"
++	"os"
++	"os/signal"
++	"runtime"
++	"strings"
++	"syscall"
++
++	grpcServer "github.com/xxf098/lite-proxy/api/rpc/liteserver"
++	C "github.com/xxf098/lite-proxy/constant"
++	"github.com/xxf098/lite-proxy/core"
++	"github.com/xxf098/lite-proxy/utils"
++	webServer "github.com/xxf098/lite-proxy/web"
++)
++
++type runMode int
++
++const (
++	runModeTest runMode = iota
++	runModeGRPC
++	runModeWeb
++	runModeInstance
++)
++
++type closableRunner interface {
++	Run() error
++	Close() error
++}
++
++func run() error {
++	if *version {
++		printVersion()
++		return nil
++	}
++
++	link := detectInputLink(os.Args[1:])
++
++	switch resolveRunMode(link) {
++	case runModeTest:
++		return runTestMode()
++	case runModeGRPC:
++		return runGRPCMode()
++	case runModeWeb:
++		return runWebMode()
++	default:
++		return runInstanceMode(link)
++	}
++}
++
++func printVersion() {
++	fmt.Printf("LiteSpeedTest %s %s %s with %s %s\n", C.Version, runtime.GOOS, runtime.GOARCH, runtime.Version(), C.BuildTime)
++}
++
++func detectInputLink(args []string) string {
++	for _, arg := range args {
++		if strings.HasPrefix(arg, "-") {
++			continue
++		}
++		if _, err := utils.CheckLink(arg); err == nil {
++			return arg
++		}
++	}
++	return ""
++}
++
++func resolveRunMode(link string) runMode {
++	if *test != "" {
++		return runModeTest
++	}
++	if *grpc {
++		return runModeGRPC
++	}
++	if link == "" {
++		return runModeWeb
++	}
++	return runModeInstance
++}
++
++func runTestMode() error {
++	return webServer.TestFromCMD(*test, conf)
++}
++
++func runGRPCMode() error {
++	return grpcServer.StartServer(uint16(*port))
++}
++
++func runWebMode() error {
++	if len(os.Args) < 2 {
++		*port = 10888
++	}
++	return webServer.ServeFile(*port)
++}
++
++func runInstanceMode(link string) error {
++	p, err := core.StartInstance(buildCoreConfig(link))
++	if err != nil {
++		return err
++	}
++	watchShutdown(p)
++	return p.Run()
++}
++
++func buildCoreConfig(link string) core.Config {
++	return core.Config{
++		LocalHost:      "0.0.0.0",
++		LocalPort:      *port,
++		Link:           link,
++		Ping:           *ping,
++		Engine:         *engineName,
++		SingboxBin:     *singboxBin,
++		SingboxWorkDir: *singboxWorkDir,
++		KeepTempFile:   *keepTemp,
++	}
++}
++
++func watchShutdown(p closableRunner) {
++	sigs := make(chan os.Signal, 1)
++	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
++	go func() {
++		defer signal.Stop(sigs)
++		<-sigs
++		_ = p.Close()
++	}()
++}
