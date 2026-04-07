@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -19,36 +20,70 @@ type GetSubscriptionLink struct {
 	Group    string `json:"group"`
 }
 
+type getSubscriptionLinkResponse struct {
+	Link string `json:"link"`
+}
+
 var subscriptionLinkMap = map[string]string{}
 
+func buildSubscriptionLink(r *http.Request, key string, group string) string {
+	scheme := forwardedScheme(r)
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		if ipAddr, err := localIP(); err == nil {
+			host = netJoinHostPortIfNeeded(ipAddr.String(), "10888")
+		} else {
+			host = "127.0.0.1:10888"
+		}
+	}
+	return fmt.Sprintf("%s://%s/getSubscription?key=%s&group=%s", scheme, host, url.QueryEscape(key), url.QueryEscape(group))
+}
+
+func forwardedScheme(r *http.Request) string {
+	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
+		return proto
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func netJoinHostPortIfNeeded(host string, port string) string {
+	if strings.Contains(host, ":") {
+		return host
+	}
+	return host + ":" + port
+}
+
 func getSubscriptionLink(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
 	body := GetSubscriptionLink{}
 	if r.Body == nil {
-		http.Error(w, "Invalid Parameter", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
 		return
 	}
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Invalid Parameter", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
 		return
 	}
 	if err = json.Unmarshal(data, &body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if len(body.FilePath) == 0 || len(body.Group) == 0 {
-		http.Error(w, "Invalid Parameter", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
 		return
 	}
-	ipAddr, err := localIP()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+
 	md5Hash := fmt.Sprintf("%x", md5.Sum([]byte(body.FilePath)))
 	subscriptionLinkMap[md5Hash] = body.FilePath
-	subscriptionLink := fmt.Sprintf("http://%s:10888/getSubscription?key=%s&group=%s", ipAddr.String(), md5Hash, body.Group)
-	fmt.Fprint(w, subscriptionLink)
+	subscriptionLink := buildSubscriptionLink(r, md5Hash, body.Group)
+	writeJSON(w, http.StatusOK, getSubscriptionLinkResponse{Link: subscriptionLink})
 }
 
 func getSubscription(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +107,7 @@ func getSubscription(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		b64Data := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
-		_, _ = w.Write([]byte(b64Data))
+		writePlainText(w, http.StatusOK, b64Data)
 		return
 	}
 
@@ -82,7 +117,7 @@ func getSubscription(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		_, _ = w.Write(data)
+		writePlainText(w, http.StatusOK, string(data))
 		return
 	}
 
@@ -103,7 +138,7 @@ func getSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, _ = w.Write(data)
+	writePlainText(w, http.StatusOK, string(data))
 }
 
 func writeClash(filePath string) ([]byte, error) {

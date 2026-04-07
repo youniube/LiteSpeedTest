@@ -571,6 +571,32 @@ export default {
             const selectedIds = new Set(this.selectedNodeIds);
             return this.result.filter(item => item && selectedIds.has(item.id));
         },
+        async readAPIErrorMessage(resp, fallback = 'Request failed') {
+            const raw = await resp.text();
+            if (!raw) {
+                return fallback;
+            }
+            try {
+                const data = JSON.parse(raw);
+                return data.error || data.message || raw;
+            } catch (_) {
+                return raw;
+            }
+        },
+        async requestJSON(path, options = {}) {
+            const resp = await fetch(this.apiPath(path), options);
+            if (!resp.ok) {
+                throw new Error(await this.readAPIErrorMessage(resp));
+            }
+            return await resp.json();
+        },
+        async requestText(path, options = {}) {
+            const resp = await fetch(this.apiPath(path), options);
+            if (!resp.ok) {
+                throw new Error(await this.readAPIErrorMessage(resp));
+            }
+            return await resp.text();
+        },
         normalizeBase64(input) {
             const normalized = `${input || ""}`.replace(/-/g, '+').replace(/_/g, '/').replace(/\s+/g, '');
             const padding = normalized.length % 4;
@@ -742,15 +768,11 @@ export default {
             };
         },
         async requestResultImage(payload) {
-            const resp = await fetch(this.apiPath(API_ROUTES.generateResult), {
+            this.picdata = await this.requestText(API_ROUTES.generateResult, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-            if (!resp.ok) {
-                throw new Error(await resp.text());
-            }
-            this.picdata = await resp.text();
         },
         parseManualResultPayload() {
             const raw = `${this.generateResultJSON || ''}`.trim();
@@ -810,17 +832,13 @@ export default {
                     })),
             };
             try {
-                const resp = await fetch(this.apiPath(API_ROUTES.renameNodes), {
+                const data = await this.requestJSON(API_ROUTES.renameNodes, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify(payload),
                 });
-                if (!resp.ok) {
-                    throw new Error(await resp.text());
-                }
-                const data = await resp.json();
                 this.applyRenamedNodes(data.nodes || []);
                 await this.refreshResultImageFromCurrentResult();
                 if (showNotice) {
@@ -1015,30 +1033,23 @@ export default {
                 }
         },
         handleCopySub: async function () {
-            // url
             if (this.subscription.trim().startsWith("http") && !this.subscription.trim().endsWith(".yaml") && !this.subscription.trim().endsWith(".yml")) {
                 await navigator.clipboard.writeText(this.subscription.trim())
                 this.$message.success("Copy Subscription succeed!");
                 return
             }
-            const host = window.location.host;
-            if (host.startsWith("127.0.0.1")) {
-                const url = `${window.location.protocol}//${window.location.host}${this.apiPath(API_ROUTES.getSubscriptionLink)}`
+            try {
                 const groupname = this.groupname.trim() || "Default"
-                const requestOptions = {
+                const data = await this.requestJSON(API_ROUTES.getSubscriptionLink, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({"filePath": this.subscription.trim(), "group": groupname})
-                };
-                fetch(url, requestOptions)
-                    .then(resp => resp.text())
-                    .then(data => {
-                        navigator.clipboard.writeText(data)
-                        this.$message.success("Copy Subscription succeed!");
-                    })
-                return
+                })
+                await this.copyToClipboard(data.link || "")
+                this.$message.success("Copy Subscription succeed!")
+            } catch (err) {
+                this.$message.error(`Copy Subscription failed: ${err}`)
             }
-            this.$message.error("Copy Subscription failed!");
         },
         handleCopy: async function () {
             try {

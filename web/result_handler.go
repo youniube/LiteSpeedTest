@@ -19,18 +19,22 @@ type TestResult struct {
 }
 
 func generateResult(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
 	result := TestResult{}
 	if r.Body == nil {
-		http.Error(w, "Please send a request body", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "Please send a request body")
 		return
 	}
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Please send a request body", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "Please send a request body")
 		return
 	}
 	if err = json.Unmarshal(data, &result); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -38,7 +42,7 @@ func generateResult(w http.ResponseWriter, r *http.Request) {
 	options := render.NewTableOptions(40, 30, 0.5, 0.5, result.FontSize, 0.5, fontPath, result.Language, result.Theme, "Asia/Shanghai", FontBytes)
 	table, err := render.NewTableWithOption(result.Nodes, &options)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -51,7 +55,10 @@ func generateResult(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	msg := table.FormatTraffic(result.TotalTraffic, result.TotalTime, fmt.Sprintf("%d/%d", successCount, linksCount))
-	if picdata, err := table.EncodeB64(msg); err == nil {
-		fmt.Fprint(w, picdata)
+	picdata, err := table.EncodeB64(msg)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
 	}
+	writePlainText(w, http.StatusOK, picdata)
 }

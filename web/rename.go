@@ -104,21 +104,19 @@ func init() {
 }
 
 func renameNodesHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	defer r.Body.Close()
 
 	req := renameRequest{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if len(req.Nodes) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(renameResponse{Nodes: []renameNode{}})
+		writeJSON(w, http.StatusOK, renameResponse{Nodes: []renameNode{}})
 		return
 	}
 
@@ -129,11 +127,10 @@ func renameNodesHandler(w http.ResponseWriter, r *http.Request) {
 
 	nodes, err := smartRenameNodes(r.Context(), req.Nodes, req.UseExternal, interval)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(renameResponse{Nodes: nodes})
+	writeJSON(w, http.StatusOK, renameResponse{Nodes: nodes})
 }
 
 func smartRenameNodes(ctx context.Context, nodes []renameNode, useExternal bool, interval time.Duration) ([]renameNode, error) {
