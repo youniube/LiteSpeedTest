@@ -517,20 +517,28 @@ export default {
     },
     methods: {
         updateRow(id, newData) {
-            const rowNode = this.gridApi.getRowNode(id);
+            if (!this.gridApi) {
+                return;
+            }
+            const rowNode = this.gridApi.getRowNode(`${id}`) || this.gridApi.getRowNode(id);
             if (!rowNode) {
                 this.gridApi.applyTransaction({ add: [newData] })
-            } else {
-                this.gridApi.applyTransaction({ update: [newData] })
+                return;
             }
+            rowNode.setData({ ...rowNode.data, ...newData });
+            this.gridApi.refreshCells({ rowNodes: [rowNode], force: true });
         },
         updateRowAsync(id, newData) {
-            const rowNode = this.gridApi.getRowNode(id);
+            if (!this.gridApi) {
+                return;
+            }
+            const rowNode = this.gridApi.getRowNode(`${id}`) || this.gridApi.getRowNode(id);
             if (!rowNode) {
                 this.gridApi.applyTransactionAsync({ add: [newData] })
-            } else {
-                this.gridApi.applyTransactionAsync({ update: [newData] })
+                return;
             }
+            rowNode.setData({ ...rowNode.data, ...newData });
+            this.gridApi.refreshCells({ rowNodes: [rowNode], force: true });
         },
         setAutoHeight() {
             this.gridApi.setDomLayout('autoHeight');
@@ -759,8 +767,24 @@ export default {
             this.picdata = '';
             this.generateResultJSON = '';
         },
+        getItemTraffic(item) {
+            if (!item) {
+                return 0;
+            }
+            const value = Number(item.traffic || 0);
+            return Number.isFinite(value) && value > 0 ? value : 0;
+        },
+        recomputeTotalTraffic(items = null) {
+            const sourceItems = Array.isArray(items) ? items.filter(item => !!item) : this.getResultItems();
+            return sourceItems.reduce((sum, item) => sum + this.getItemTraffic(item), 0);
+        },
+        syncTotalTrafficFromResult() {
+            this.totalTraffic = this.recomputeTotalTraffic();
+            return this.totalTraffic;
+        },
         buildRenderResultPayload(items = null) {
             const sourceItems = Array.isArray(items) ? items.filter(item => !!item) : this.getRenderableResultItems();
+            const totalTraffic = this.recomputeTotalTraffic(sourceItems);
             const nodes = sourceItems.map(item => {
                 const avg_speed = Math.floor(this.getSpeed(item.speed)) || 0;
                 const max_speed = Math.floor(this.getSpeed(item.maxspeed)) || 0;
@@ -776,7 +800,7 @@ export default {
                 };
             });
             return {
-                totalTraffic: this.bytesToSize(this.totalTraffic),
+                totalTraffic: this.bytesToSize(totalTraffic),
                 totalTime: this.formatSeconds(this.totalTime),
                 language: this.language,
                 fontSize: this.fontSize,
@@ -811,7 +835,6 @@ export default {
             if (!Array.isArray(nodes) || !nodes.length) {
                 return;
             }
-            const updates = [];
             nodes.forEach(node => {
                 const current = this.result[node.id];
                 if (!current) {
@@ -824,11 +847,8 @@ export default {
                     link: this.rewriteLinkRemark(node.link || current.link, nextRemark),
                 };
                 this.result[node.id] = next;
-                updates.push(next);
+                this.updateRow(node.id, next);
             });
-            if (updates.length && this.gridApi) {
-                this.gridApi.applyTransaction({ update: updates });
-            }
             this.syncSelectionWithResult();
             this.scheduleDerivedStateSync();
         },
@@ -1386,6 +1406,7 @@ export default {
                         ping: "0.00",
                         speed: "0.00B",
                         maxspeed: "0.00B",
+                        traffic: 0,
                         completed: false,
                     };
                     this.result[id] = item;
@@ -1461,8 +1482,9 @@ export default {
                     item = this.result[id];
                     item.speed = json.speed;
                     item.maxspeed = json.maxspeed;
-                    this.totalTraffic += json.traffic
+                    item.traffic = this.getItemTraffic(item) + (Number(json.traffic) || 0);
                     this.result[id] = item;
+                    this.syncTotalTrafficFromResult();
                     this.updateRowAsync(id, item);
                     break;
                 case "picsaving":
@@ -1476,6 +1498,7 @@ export default {
                     break;
                 case "eof":
                     this.loading = false;
+                    this.syncTotalTrafficFromResult();
                     this.handleSmartRename(false)
                         .catch(() => {})
                         .finally(() => {
