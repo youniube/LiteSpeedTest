@@ -16,15 +16,22 @@ import (
 )
 
 type GetSubscriptionLink struct {
-	FilePath string `json:"filePath"`
-	Group    string `json:"group"`
+	FilePath string   `json:"filePath"`
+	Group    string   `json:"group"`
+	Links    []string `json:"links,omitempty"`
 }
 
 type getSubscriptionLinkResponse struct {
 	Link string `json:"link"`
 }
 
-var subscriptionLinkMap = map[string]string{}
+type subscriptionEntry struct {
+	FilePath string
+	Group    string
+	Links    []string
+}
+
+var subscriptionLinkMap = map[string]subscriptionEntry{}
 
 func buildSubscriptionLink(r *http.Request, key string, group string) string {
 	scheme := forwardedScheme(r)
@@ -75,15 +82,51 @@ func getSubscriptionLink(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(body.FilePath) == 0 || len(body.Group) == 0 {
+	if len(body.Group) == 0 {
+		writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
+		return
+	}
+	for _, link := range body.Links {
+		if strings.TrimSpace(link) != "" {
+			goto payloadReady
+		}
+	}
+	if len(strings.TrimSpace(body.FilePath)) == 0 {
 		writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
 		return
 	}
 
-	md5Hash := fmt.Sprintf("%x", md5.Sum([]byte(body.FilePath)))
-	subscriptionLinkMap[md5Hash] = body.FilePath
+payloadReady:
+
+	payloadKey := body.FilePath + "\n" + body.Group + "\n" + strings.Join(body.Links, "\n")
+	md5Hash := fmt.Sprintf("%x", md5.Sum([]byte(payloadKey)))
+	subscriptionLinkMap[md5Hash] = subscriptionEntry{
+		FilePath: strings.TrimSpace(body.FilePath),
+		Group:    strings.TrimSpace(body.Group),
+		Links:    sanitizeLinks(body.Links),
+	}
 	subscriptionLink := buildSubscriptionLink(r, md5Hash, body.Group)
 	writeJSON(w, http.StatusOK, getSubscriptionLinkResponse{Link: subscriptionLink})
+}
+
+func sanitizeLinks(links []string) []string {
+	output := make([]string, 0, len(links))
+	for _, link := range links {
+		trimmed := strings.TrimSpace(link)
+		if trimmed == "" {
+			continue
+		}
+		output = append(output, trimmed)
+	}
+	return output
+}
+
+func encodeLinksSubscription(links []string) string {
+	joined := strings.Join(sanitizeLinks(links), "\n")
+	if joined == "" {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString([]byte(joined))
 }
 
 func getSubscription(w http.ResponseWriter, r *http.Request) {
@@ -94,11 +137,21 @@ func getSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sub := queries.Get("sub")
-	filePath, ok := subscriptionLinkMap[key]
+	entry, ok := subscriptionLinkMap[key]
 	if !ok {
 		http.Error(w, "Wrong key", http.StatusBadRequest)
 		return
 	}
+	if len(entry.Links) > 0 {
+		payload := encodeLinksSubscription(entry.Links)
+		if payload == "" {
+			http.Error(w, "No links found", http.StatusBadRequest)
+			return
+		}
+		writePlainText(w, http.StatusOK, payload)
+		return
+	}
+	filePath := entry.FilePath
 
 	if isYamlFile(filePath) && utils.IsUrl(filePath) {
 		links, err := getSubscriptionLinks(filePath)

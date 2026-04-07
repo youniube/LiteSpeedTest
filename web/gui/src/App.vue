@@ -569,7 +569,24 @@ export default {
                 return [];
             }
             const selectedIds = new Set(this.selectedNodeIds);
+            if (this.gridApi) {
+                const items = [];
+                this.gridApi.forEachNodeAfterFilterAndSort(node => {
+                    if (node && node.data && selectedIds.has(node.data.id)) {
+                        items.push(node.data);
+                    }
+                });
+                return items;
+            }
             return this.result.filter(item => item && selectedIds.has(item.id));
+        },
+        requireSelectedNodes(actionLabel) {
+            const nodes = this.getSelectedNodes();
+            if (!nodes.length) {
+                this.$message.warning(`${actionLabel}前请先选择节点`);
+                return null;
+            }
+            return nodes;
         },
         async readAPIErrorMessage(resp, fallback = 'Request failed') {
             const raw = await resp.text();
@@ -742,8 +759,9 @@ export default {
             this.picdata = '';
             this.generateResultJSON = '';
         },
-        buildRenderResultPayload() {
-            const nodes = this.getRenderableResultItems().map(item => {
+        buildRenderResultPayload(items = null) {
+            const sourceItems = Array.isArray(items) ? items.filter(item => !!item) : this.getRenderableResultItems();
+            const nodes = sourceItems.map(item => {
                 const avg_speed = Math.floor(this.getSpeed(item.speed)) || 0;
                 const max_speed = Math.floor(this.getSpeed(item.maxspeed)) || 0;
                 return {
@@ -1033,28 +1051,35 @@ export default {
                 }
         },
         handleCopySub: async function () {
-            if (this.subscription.trim().startsWith("http") && !this.subscription.trim().endsWith(".yaml") && !this.subscription.trim().endsWith(".yml")) {
-                await navigator.clipboard.writeText(this.subscription.trim())
-                this.$message.success("Copy Subscription succeed!");
-                return
-            }
             try {
-                const groupname = this.groupname.trim() || "Default"
+                const groupname = this.groupname.trim() || "Default";
+                const exportNodes = this.getRenderableResultItems();
+                const payload = { group: groupname };
+                if (exportNodes.length) {
+                    payload.links = exportNodes.map(item => this.buildNodeLink(item)).filter(link => !!link);
+                }
+                if (!payload.links || !payload.links.length) {
+                    payload.filePath = this.subscription.trim();
+                }
                 const data = await this.requestJSON(API_ROUTES.getSubscriptionLink, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({"filePath": this.subscription.trim(), "group": groupname})
-                })
-                await this.copyToClipboard(data.link || "")
-                this.$message.success("Copy Subscription succeed!")
+                    body: JSON.stringify(payload)
+                });
+                await this.copyToClipboard(data.link || "");
+                this.$message.success(exportNodes.length ? "Copy current subscription succeed!" : "Copy Subscription succeed!");
             } catch (err) {
-                this.$message.error(`Copy Subscription failed: ${err}`)
+                this.$message.error(`Copy Subscription failed: ${err}`);
             }
         },
         handleCopy: async function () {
+            const selectedNodes = this.requireSelectedNodes('复制');
+            if (!selectedNodes) {
+                return;
+            }
             try {
-                const links = this.getSelectedNodes().map(elem => this.buildNodeLink(elem)).join("\n")
-                await this.copyToClipboard(links)
+                const links = selectedNodes.map(elem => this.buildNodeLink(elem)).join("\n");
+                await this.copyToClipboard(links);
                 this.$message.success("Copy link succeed!");
             } catch (err) {
                 this.$message.error("Copy link failed!");
@@ -1062,8 +1087,12 @@ export default {
         },
         handleCopyAvailable: async function () {
             try {
-                const links = this.result.filter(elem => this.nodeAvailable(elem)).map(elem => this.buildNodeLink(elem))
-                await this.copyToClipboard(links.join("\n"))
+                const links = this.getRenderableResultItems().filter(elem => this.nodeAvailable(elem)).map(elem => this.buildNodeLink(elem));
+                if (!links.length) {
+                    this.$message.warning('当前可见结果里没有可用节点');
+                    return;
+                }
+                await this.copyToClipboard(links.join("\n"));
                 this.$message.success(`Copy ${links.length} link${links.length>1 ? "s" : ""} succeed!`);
             } catch (err) {
                 this.$message.error(`Copy link failed!`);
@@ -1082,8 +1111,13 @@ export default {
             this.qrCodeDialogVisible = true
         },
         handleQRCodeCreate: function () {
+            const selectedNodes = this.requireSelectedNodes('生成二维码');
+            if (!selectedNodes) {
+                this.qrCodeDialogVisible = false;
+                return;
+            }
             this.$nextTick(() => {
-                const items = this.getSelectedNodes().map(item => {
+                const items = selectedNodes.map(item => {
                     return {
                         gid: 'qrcode_' + item.id,
                         link: this.buildNodeLink(item),
@@ -1098,15 +1132,14 @@ export default {
             })
         },
         handleRetest: function () {
-            // const data = { testid: id, testMode: 3, links: [link], ...this.getJSONOptions() }
-            const selectedNodes = this.getSelectedNodes()
-            const testids = selectedNodes.map(elem => elem.id)
-            const links = selectedNodes.map(elem => this.buildNodeLink(elem))
-            const data = { testMode: 3, ...this.getJSONOptions(), testids, links }
-            // this.$refs.result.clearSelection();
-            // this.$refs.result.clearFilter();
-            // this.$refs.result.clearSort();
-            console.log(`handleRetest: ${JSON.stringify(data)}`)
+            const selectedNodes = this.requireSelectedNodes('重新测试');
+            if (!selectedNodes) {
+                return;
+            }
+            const testids = selectedNodes.map(elem => elem.id);
+            const links = selectedNodes.map(elem => this.buildNodeLink(elem));
+            const data = { testMode: 3, ...this.getJSONOptions(), testids, links };
+            console.log(`handleRetest: ${JSON.stringify(data)}`);
             this.send(JSON.stringify(data));
         },
         saveData: function (data, name) {
