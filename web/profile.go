@@ -499,14 +499,17 @@ func (p *ProfileTest) testAll(ctx context.Context) (render.Nodes, error) {
 	nodeChan := make(chan render.Node, linksCount)
 
 	nodes := make(render.Nodes, linksCount)
+	idToPos := make(map[int]int, linksCount)
+	useCustomIDs := len(p.Options.TestIDs) == linksCount && len(p.Options.Links) == linksCount
 	for i := range p.Links {
 		p.wg.Add(1)
 		id := i
 		link := ""
-		if len(p.Options.TestIDs) > 0 && len(p.Options.Links) > 0 {
+		if useCustomIDs {
 			id = p.Options.TestIDs[i]
 			link = p.Options.Links[i]
 		}
+		idToPos[id] = i
 		select {
 		case guard <- i:
 			go func(id int, link string, c <-chan int, nodeChan chan<- render.Node) {
@@ -526,8 +529,14 @@ func (p *ProfileTest) testAll(ctx context.Context) (render.Nodes, error) {
 	var traffic int64 = 0
 	for i := 0; i < linksCount; i++ {
 		node := <-nodeChan
-		node.Link = p.Links[node.Id]
-		nodes[node.Id] = node
+		pos, ok := idToPos[node.Id]
+		if !ok || pos < 0 || pos >= linksCount {
+			pos = i
+		}
+		if node.Link == "" && pos >= 0 && pos < len(p.Links) {
+			node.Link = p.Links[pos]
+		}
+		nodes[pos] = node
 		traffic += node.Traffic
 		if node.IsOk {
 			successCount += 1
@@ -621,6 +630,7 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 			AvgSpeed: 0,
 			MaxSpeed: 0,
 			IsOk:     elapse > 0,
+			Link:     link,
 		}
 	}
 	defer func() {
@@ -739,6 +749,7 @@ func (p *ProfileTest) testOne(ctx context.Context, index int, link string, nodeC
 			MaxSpeed: max,
 			IsOk:     true,
 			Traffic:  sum,
+			Link:     link,
 		}
 		emitted = true
 		nodeChan <- node
