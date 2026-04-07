@@ -61,10 +61,17 @@ func gotserverMsg(id int, link string, groupName string) []byte {
 	return b
 }
 
-func gotserversMsg(startID int, links []string, groupName string) []byte {
+func gotserversMsg(startID int, links []string, groupName string, ids ...[]int) []byte {
 	servers := Message{ID: startID, Info: "gotservers"}
+	customIDs := []int(nil)
+	if len(ids) > 0 {
+		customIDs = ids[0]
+	}
 	for i, link := range links {
 		id := startID + i
+		if len(customIDs) == len(links) {
+			id = customIDs[i]
+		}
 		msg := Message{ID: id, Info: "gotserver"}
 		cfg, err := config.Link2Config(link)
 		if err == nil {

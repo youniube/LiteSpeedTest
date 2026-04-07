@@ -479,6 +479,7 @@ func (p *ProfileTest) testAll(ctx context.Context) (render.Nodes, error) {
 	// 	p.WriteMessage(gotserverMsg(i, p.Links[i], p.Options.GroupName))
 	// }
 	step := 9
+	useCustomIDs := len(p.Options.TestIDs) == linksCount && len(p.Options.Links) == linksCount
 	if linksCount > 200 {
 		step = linksCount / 20
 		if step > 50 {
@@ -491,8 +492,13 @@ func (p *ProfileTest) testAll(ctx context.Context) (render.Nodes, error) {
 			end = linksCount
 		}
 		links := p.Links[i:end]
-		msg := gotserversMsg(i, links, p.Options.GroupName)
-		p.WriteMessage(msg)
+		if useCustomIDs {
+			msg := gotserversMsg(i, links, p.Options.GroupName, p.Options.TestIDs[i:end])
+			p.WriteMessage(msg)
+		} else {
+			msg := gotserversMsg(i, links, p.Options.GroupName)
+			p.WriteMessage(msg)
+		}
 		i += step
 	}
 	guard := make(chan int, p.Options.Concurrency)
@@ -500,7 +506,6 @@ func (p *ProfileTest) testAll(ctx context.Context) (render.Nodes, error) {
 
 	nodes := make(render.Nodes, linksCount)
 	idToPos := make(map[int]int, linksCount)
-	useCustomIDs := len(p.Options.TestIDs) == linksCount && len(p.Options.Links) == linksCount
 	for i := range p.Links {
 		p.wg.Add(1)
 		id := i

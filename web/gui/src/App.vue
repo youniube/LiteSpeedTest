@@ -394,6 +394,8 @@ export default {
             renameIntervalMs: 1200,
             sortState: {},
             resultSyncTimer: null,
+            lastRunNodeIds: [],
+            lastRunPartial: false,
             // agGrid
             columns: this.columns,
             gridApi: null,
@@ -740,6 +742,14 @@ export default {
             }
             return this.getResultItems();
         },
+        getCurrentRunItems() {
+            const items = this.getRenderableResultItems();
+            if (!this.lastRunPartial || !Array.isArray(this.lastRunNodeIds) || !this.lastRunNodeIds.length) {
+                return items;
+            }
+            const selectedIds = new Set(this.lastRunNodeIds);
+            return items.filter(item => item && selectedIds.has(item.id));
+        },
         syncSelectionWithResult() {
             if (!Array.isArray(this.selectedNodeIds) || !this.selectedNodeIds.length) {
                 this.multipleSelection = [];
@@ -768,7 +778,7 @@ export default {
             }, 60);
         },
         syncGenerateResultJSONFromCurrentResult() {
-            const items = this.getResultItems();
+            const items = this.getCurrentRunItems();
             if (!items.length) {
                 this.generateResultJSON = '';
                 return null;
@@ -800,7 +810,7 @@ export default {
             return Number.isFinite(value) && value > 0 ? value : 0;
         },
         recomputeTotalTraffic(items = null) {
-            const sourceItems = Array.isArray(items) ? items.filter(item => !!item) : this.getResultItems();
+            const sourceItems = Array.isArray(items) ? items.filter(item => !!item) : this.getCurrentRunItems();
             return sourceItems.reduce((sum, item) => sum + this.getItemTraffic(item), 0);
         },
         syncTotalTrafficFromResult() {
@@ -808,7 +818,7 @@ export default {
             return this.totalTraffic;
         },
         buildRenderResultPayload(items = null) {
-            const sourceItems = Array.isArray(items) ? items.filter(item => !!item) : this.getRenderableResultItems();
+            const sourceItems = Array.isArray(items) ? items.filter(item => !!item) : this.getCurrentRunItems();
             const totalTraffic = this.recomputeTotalTraffic(sourceItems);
             const nodes = sourceItems.map(item => {
                 const avg_speed = Math.floor(this.getSpeed(item.speed)) || 0;
@@ -1028,6 +1038,8 @@ export default {
                 // this.$refs.result.clearFilter();
                 // this.$refs.result.clearSort();
                 this.clearSelectionState();
+                this.lastRunPartial = false;
+                this.lastRunNodeIds = [];
                 this.setAutoHeight()
                 this.loading = true;
                 this.totalTraffic = 0;
@@ -1053,6 +1065,8 @@ export default {
             this.loadingContent = "等待后端响应……";
             this.result = [];
             this.clearSelectionState();
+            this.lastRunPartial = false;
+            this.lastRunNodeIds = [];
             this.clearDerivedResultState();
             this.disconnect();
         },
@@ -1185,13 +1199,18 @@ export default {
             if (!selectedNodes) {
                 return;
             }
+            const testids = selectedNodes.map(elem => elem.id);
+            this.lastRunPartial = true;
+            this.lastRunNodeIds = [...testids];
+            this.testCount = 0;
+            this.testOkCount = 0;
             this.resetNodesForRetest(selectedNodes);
             this.loading = true;
             this.loadingContent = '重新测速中……';
             this.totalTime = 0;
+            this.syncTotalTrafficFromResult();
             this.clearDerivedResultState();
             this.incrTotalTime();
-            const testids = selectedNodes.map(elem => elem.id);
             const links = selectedNodes.map(elem => this.buildNodeLink(elem));
             const data = { testMode: 3, ...this.getJSONOptions(), testids, links };
             console.log(`handleRetest: ${JSON.stringify(data)}`);
@@ -1456,30 +1475,41 @@ export default {
                     this.updateRow(id, item);
                     break;
                 case "gotservers":
-                    const items = json.servers.map(json => {
-                        item = {
-                            id: json.id,
-                            group: this.groupname == "" ? json.group : this.groupname,
-                            remark: json.remarks,
-                            server: json.server,
-                            protocol: json.protocol,
-                            link: json.link,
-                            loss: "0.00%",
-                            ping: "0.00",
-                            speed: "0.00B",
-                            maxspeed: "0.00B",
-                            traffic: 0,
-                            completed: false,
-                        };
-                        this.result[json.id] = item;
-                        return item
-                    });
-                    this.gridApi.applyTransaction({ add: items })
-                    if (this.domLayout === "autoHeight" && this.result.length > 150) {
-                        this.setFixedHeight()
-                        this.domLayout = "normal"
-                    } 
-                    break;							
+                    {
+                        const addItems = [];
+                        json.servers.forEach(server => {
+                            item = {
+                                id: server.id,
+                                group: this.groupname == "" ? server.group : this.groupname,
+                                remark: server.remarks,
+                                server: server.server,
+                                protocol: server.protocol,
+                                link: server.link,
+                                loss: "0.00%",
+                                ping: "0.00",
+                                speed: "0.00B",
+                                maxspeed: "0.00B",
+                                traffic: 0,
+                                completed: false,
+                            };
+                            const exists = !!this.result[server.id];
+                            this.result[server.id] = item;
+                            if (exists) {
+                                this.updateRow(server.id, item);
+                            } else {
+                                addItems.push(item);
+                            }
+                        });
+                        if (addItems.length && this.gridApi) {
+                            this.gridApi.applyTransaction({ add: addItems });
+                        }
+                        if (this.domLayout === "autoHeight" && this.result.length > 150) {
+                            this.setFixedHeight();
+                            this.domLayout = "normal";
+                        }
+                        this.scheduleDerivedStateSync();
+                    }
+                    break;
                 case "endone":
                     item = this.result[id];
                     if (!item) {
@@ -1546,7 +1576,10 @@ export default {
                     this.handleSmartRename(false)
                         .catch(() => {})
                         .finally(() => {
-                            this.$notify.success(`${this.result.length}个节点测试完成`);
+                            const finishedCount = this.lastRunPartial && this.lastRunNodeIds.length
+                                ? this.lastRunNodeIds.length
+                                : this.getResultItems().length;
+                            this.$notify.success(`${finishedCount}个节点测试完成`);
                         });
                     break;
                 case "retest":
