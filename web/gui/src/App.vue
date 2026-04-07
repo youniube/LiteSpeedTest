@@ -158,7 +158,7 @@
                                             <el-dropdown-item v-if="!loading && result.length" @click.native="handleSmartRename()">重命名节点</el-dropdown-item>
                                             <el-dropdown-item v-if="selectedNodes.length" @click.native="handleCopy()">复制节点</el-dropdown-item>
                                             <el-dropdown-item v-if="selectedNodes.length" @click.native="handleSave()">导出节点</el-dropdown-item>
-                                            <!-- <el-dropdown-item @click.native="handleRetest()">重新测试</el-dropdown-item> -->
+                                            <el-dropdown-item v-if="selectedNodes.length" @click.native="handleRetest()">重新测试</el-dropdown-item>
                                             <el-dropdown-item v-if="selectedNodes.length" @click.native="handleQRCode()">显示二维码</el-dropdown-item>
                                             <el-dropdown-item v-if="selectedNodes.length" @click.native="handleExportResult()">导出结果</el-dropdown-item>
                                         </el-dropdown-menu>
@@ -595,6 +595,31 @@ export default {
                 return null;
             }
             return nodes;
+        },
+        resetNodesForRetest(nodes) {
+            if (!Array.isArray(nodes) || !nodes.length) {
+                return;
+            }
+            nodes.forEach(node => {
+                const current = this.result[node.id];
+                if (!current) {
+                    return;
+                }
+                const next = {
+                    ...current,
+                    loss: '0.00%',
+                    ping: '0.00',
+                    speed: '0.00B',
+                    maxspeed: '0.00B',
+                    traffic: 0,
+                    completed: false,
+                    testing: true,
+                };
+                this.result[node.id] = next;
+                this.updateRow(node.id, next);
+            });
+            this.syncTotalTrafficFromResult();
+            this.scheduleDerivedStateSync();
         },
         async readAPIErrorMessage(resp, fallback = 'Request failed') {
             const raw = await resp.text();
@@ -1128,6 +1153,10 @@ export default {
             });
         },
         handleQRCode() {
+            const selectedNodes = this.requireSelectedNodes('生成二维码');
+            if (!selectedNodes) {
+                return;
+            }
             this.qrCodeDialogVisible = true
         },
         handleQRCodeCreate: function () {
@@ -1156,6 +1185,12 @@ export default {
             if (!selectedNodes) {
                 return;
             }
+            this.resetNodesForRetest(selectedNodes);
+            this.loading = true;
+            this.loadingContent = '重新测速中……';
+            this.totalTime = 0;
+            this.clearDerivedResultState();
+            this.incrTotalTime();
             const testids = selectedNodes.map(elem => elem.id);
             const links = selectedNodes.map(elem => this.buildNodeLink(elem));
             const data = { testMode: 3, ...this.getJSONOptions(), testids, links };
@@ -1188,7 +1223,11 @@ export default {
             this.dashboardCollapsed = !this.dashboardCollapsed
         },
         handleSave: function () {
-            const links = this.getSelectedNodes().map(elem => {
+            const selectedNodes = this.requireSelectedNodes('导出');
+            if (!selectedNodes) {
+                return;
+            }
+            const links = selectedNodes.map(elem => {
                     const link = this.rewriteLinkRemark(elem.link, elem.remark);
                     return `# ${elem.remark}\t${elem.ping}\t${elem.speed}\t${elem.maxspeed}\n${link}`
             })
@@ -1197,8 +1236,12 @@ export default {
             }
             this.saveData(links.join("\n"), "profile")
         },
-        handleExportResult: function (params) {
-            const data = this.buildRenderResultPayload();
+        handleExportResult: function () {
+            const selectedNodes = this.requireSelectedNodes('导出结果');
+            if (!selectedNodes) {
+                return;
+            }
+            const data = this.buildRenderResultPayload(selectedNodes);
             this.saveData(JSON.stringify(data, null, 2), "result")
         },
         colorCell: function ({
@@ -1425,6 +1468,7 @@ export default {
                             ping: "0.00",
                             speed: "0.00B",
                             maxspeed: "0.00B",
+                            traffic: 0,
                             completed: false,
                         };
                         this.result[json.id] = item;
