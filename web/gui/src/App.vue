@@ -75,7 +75,7 @@
                                     </el-form-item>
                                     <el-form-item label="重命名：" v-if="option<2">
                                         <el-checkbox v-model="renameUseExternal" :disabled="loading">外部查询</el-checkbox>
-                                        <el-input v-model="renameIntervalMs" style="width: 160px; margin-left: 12px" type="number" min="300" max="5000"
+                                        <el-input v-model="renameIntervalMs" style="width: 160px; margin-left: 12px" type="number" min="1200" max="10000"
                                             :disabled="loading || !renameUseExternal">
                                             <template #append>ms</template>
                                         </el-input>
@@ -391,7 +391,7 @@ export default {
             testCount: 0,
             testOkCount: 0,
             renameUseExternal: true,
-            renameIntervalMs: 1200,
+            renameIntervalMs: 2000,
             sortState: {},
             resultSyncTimer: null,
             lastRunNodeIds: [],
@@ -893,7 +893,7 @@ export default {
             }
             const payload = {
                 useExternal: !!this.renameUseExternal,
-                intervalMs: parseInt(this.renameIntervalMs, 10) || 1200,
+                intervalMs: parseInt(this.renameIntervalMs, 10) || 2000,
                 nodes: this.result
                     .filter(item => !!item)
                     .map(item => ({

@@ -42,6 +42,16 @@ type renameGeoCacheEntry struct {
 	ExpiresAt time.Time      `json:"expiresAt"`
 }
 
+type renameDNSCacheEntry struct {
+	IP        string    `json:"ip"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+type renameLookupState struct {
+	dnsBatch     map[string]string
+	dnsBatchSeen map[string]bool
+}
+
 type renameLocation struct {
 	Code string `json:"code"`
 	Zh   string `json:"zh"`
@@ -57,6 +67,7 @@ var (
 	renameCacheMu      sync.Mutex
 	renameLastExternal time.Time
 	renameGeoCache     map[string]renameGeoCacheEntry
+	renameDNSCache     map[string]renameDNSCacheEntry
 	renameGeoCacheOnce sync.Once
 
 	renameSplitExpr  = regexp.MustCompile(`[\s|/_\\\-]+`)
@@ -121,7 +132,10 @@ func renameNodesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	interval := time.Duration(req.IntervalMs) * time.Millisecond
-	if interval < 300*time.Millisecond {
+	switch {
+	case req.IntervalMs <= 0:
+		interval = 2000 * time.Millisecond
+	case interval < 1200*time.Millisecond:
 		interval = 1200 * time.Millisecond
 	}
 
@@ -138,9 +152,13 @@ func smartRenameNodes(ctx context.Context, nodes []renameNode, useExternal bool,
 	totals := map[string]int{}
 	counts := map[string]int{}
 	bases := make([]string, len(nodes))
+	lookupState := &renameLookupState{
+		dnsBatch:     map[string]string{},
+		dnsBatchSeen: map[string]bool{},
+	}
 
 	for i, node := range nodes {
-		base := buildRenameBase(ctx, node, useExternal, interval)
+		base := buildRenameBase(ctx, node, useExternal, interval, lookupState)
 		if base == "" {
 			base = "🌐UN-未知"
 		}
@@ -157,7 +175,7 @@ func smartRenameNodes(ctx context.Context, nodes []renameNode, useExternal bool,
 	return outputs, nil
 }
 
-func buildRenameBase(ctx context.Context, node renameNode, useExternal bool, interval time.Duration) string {
+func buildRenameBase(ctx context.Context, node renameNode, useExternal bool, interval time.Duration, lookupState *renameLookupState) string {
 	remark := strings.TrimSpace(node.Remark)
 	server := strings.TrimSpace(node.Server)
 	link := strings.TrimSpace(node.Link)
@@ -178,7 +196,7 @@ func buildRenameBase(ctx context.Context, node renameNode, useExternal bool, int
 		return formatRenameBase(loc)
 	}
 	if useExternal {
-		if loc := lookupGeoLocation(ctx, server, interval); loc.Code != "" {
+		if loc := lookupGeoLocation(ctx, server, interval, lookupState); loc.Code != "" {
 			return formatRenameBase(loc)
 		}
 	}
@@ -286,7 +304,7 @@ func inferLocationFromServer(server string) renameLocation {
 	return renameLocation{}
 }
 
-func lookupGeoLocation(ctx context.Context, server string, interval time.Duration) renameLocation {
+func lookupGeoLocation(ctx context.Context, server string, interval time.Duration, lookupState *renameLookupState) renameLocation {
 	host := extractHost(server)
 	if host == "" {
 		return renameLocation{}
@@ -294,7 +312,7 @@ func lookupGeoLocation(ctx context.Context, server string, interval time.Duratio
 
 	ip := host
 	if parsed := net.ParseIP(host); parsed == nil {
-		resolved := resolvePublicIP(host)
+		resolved := resolvePublicIP(host, lookupState)
 		if resolved == "" {
 			return renameLocation{}
 		}
@@ -436,26 +454,75 @@ func extractHost(server string) string {
 	return server
 }
 
-func resolvePublicIP(host string) string {
+func resolvePublicIP(host string, lookupState *renameLookupState) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+
+	if lookupState != nil && lookupState.dnsBatchSeen[host] {
+		return lookupState.dnsBatch[host]
+	}
+
+	renameGeoCacheOnce.Do(loadRenameGeoCache)
+
+	now := time.Now()
+	renameCacheMu.Lock()
+	if entry, ok := renameDNSCache[host]; ok {
+		if now.Before(entry.ExpiresAt) {
+			ip := entry.IP
+			renameCacheMu.Unlock()
+			if lookupState != nil {
+				lookupState.dnsBatchSeen[host] = true
+				lookupState.dnsBatch[host] = ip
+			}
+			return ip
+		}
+		delete(renameDNSCache, host)
+	}
+	renameCacheMu.Unlock()
+
 	ips, err := net.LookupIP(host)
 	if err != nil {
+		if lookupState != nil {
+			lookupState.dnsBatchSeen[host] = true
+			lookupState.dnsBatch[host] = ""
+		}
 		return ""
 	}
 	sort.SliceStable(ips, func(i, j int) bool {
 		return len(ips[i]) < len(ips[j])
 	})
+
+	resolved := ""
 	for _, ip := range ips {
 		if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || isPrivateIP(ip) {
 			continue
 		}
-		return ip.String()
+		resolved = ip.String()
+		break
 	}
-	for _, ip := range ips {
-		if ip != nil {
-			return ip.String()
+	if resolved == "" {
+		for _, ip := range ips {
+			if ip != nil {
+				resolved = ip.String()
+				break
+			}
 		}
 	}
-	return ""
+
+	if lookupState != nil {
+		lookupState.dnsBatchSeen[host] = true
+		lookupState.dnsBatch[host] = resolved
+	}
+	if resolved == "" {
+		return ""
+	}
+
+	renameCacheMu.Lock()
+	renameDNSCache[host] = renameDNSCacheEntry{IP: resolved, ExpiresAt: time.Now().Add(24 * time.Hour)}
+	renameCacheMu.Unlock()
+	return resolved
 }
 
 func renameCacheFilePath() string {
@@ -466,6 +533,7 @@ func renameCacheFilePath() string {
 
 func loadRenameGeoCache() {
 	renameGeoCache = map[string]renameGeoCacheEntry{}
+	renameDNSCache = map[string]renameDNSCacheEntry{}
 	data, err := os.ReadFile(renameCacheFilePath())
 	if err != nil {
 		return
