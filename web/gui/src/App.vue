@@ -902,6 +902,7 @@ export default {
                         server: item.server,
                         protocol: item.protocol,
                         link: item.link,
+                        available: !this.renameUseExternal || this.nodeAvailable(item),
                     })),
             };
             try {

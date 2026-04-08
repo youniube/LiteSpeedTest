@@ -20,11 +20,12 @@ import (
 )
 
 type renameNode struct {
-	ID       int    `json:"id"`
-	Remark   string `json:"remark"`
-	Server   string `json:"server"`
-	Protocol string `json:"protocol"`
-	Link     string `json:"link"`
+	ID        int    `json:"id"`
+	Remark    string `json:"remark"`
+	Server    string `json:"server"`
+	Protocol  string `json:"protocol"`
+	Link      string `json:"link"`
+	Available *bool  `json:"available,omitempty"`
 }
 
 type renameRequest struct {
@@ -153,7 +154,13 @@ func smartRenameNodes(ctx context.Context, nodes []renameNode, useExternal bool,
 	bases := make([]string, len(nodes))
 	lookupState := &renameLookupState{dnsBatch: map[string]string{}}
 
+	skipped := make([]bool, len(nodes))
 	for i, node := range nodes {
+		if node.Available != nil && !*node.Available {
+			skipped[i] = true
+			outputs[i] = node
+			continue
+		}
 		base := buildRenameBase(ctx, node, useExternal, interval, lookupState)
 		if base == "" {
 			base = "🌐UN-未知"
@@ -163,6 +170,9 @@ func smartRenameNodes(ctx context.Context, nodes []renameNode, useExternal bool,
 	}
 
 	for i, node := range nodes {
+		if skipped[i] {
+			continue
+		}
 		base := bases[i]
 		counts[base]++
 		node.Remark = fmt.Sprintf("%s %02d", base, counts[base])
