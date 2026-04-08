@@ -567,7 +567,7 @@ func resolvePublicIP(host string, lookupState *renameLookupState) string {
 	}
 
 	renameCacheMu.Lock()
-	renameDNSCache[host] = renameDNSCacheEntry{IP: resolved, ExpiresAt: time.Now().Add(24 * time.Hour)}
+	renameDNSCache[host] = renameDNSCacheEntry{IP: resolved, ExpiresAt: time.Now().Add(12 * time.Hour)}
 	renameCacheMu.Unlock()
 	return resolved
 }
