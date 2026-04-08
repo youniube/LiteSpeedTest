@@ -1,9 +1,10 @@
-NAME=lite
+NAME=litespeedtest
 BINDIR=bin
 VERSION=$(shell git describe --tags || echo "unknown version")
 BUILDTIME=$(shell date -u)
-GOBUILD=CGO_ENABLED=0 go build -trimpath -ldflags '-X "github.com/xxf098/LiteSpeedTest/constant.Version=$(VERSION)" \
-		-X "github.com/xxf098/LiteSpeedTest/constant.BuildTime=$(BUILDTIME)" \
+MODULE_PATH=github.com/xxf098/lite-proxy
+GOBUILD=CGO_ENABLED=0 go build -trimpath -ldflags '-X "$(MODULE_PATH)/constant.Version=$(VERSION)" \
+		-X "$(MODULE_PATH)/constant.BuildTime=$(BUILDTIME)" \
 		-w -s -buildid='
 
 PLATFORM_LIST = \

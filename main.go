@@ -11,7 +11,7 @@ var (
 	conf           = flag.String("config", "", "command line options")
 	ping           = flag.Int("ping", 2, "retry times to ping link on startup")
 	grpc           = flag.Bool("grpc", false, "start grpc server")
-	version        = flag.Bool("v", false, "show current version of clash")
+	version        = flag.Bool("v", false, "show LiteSpeedTest version")
 	engineName     = flag.String("engine", "", "native | singbox")
 	singboxBin     = flag.String("singbox-bin", "sing-box", "path to sing-box binary")
 	singboxWorkDir = flag.String("singbox-workdir", ".lite-singbox", "sing-box temp work directory")

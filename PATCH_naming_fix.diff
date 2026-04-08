@@ -1,0 +1,27 @@
+--- /tmp/orig_for_diff/Makefile	2026-04-08 03:10:17.855258839 +0000
++++ /tmp/new_for_diff/Makefile	2026-04-08 03:10:17.870541048 +0000
+@@ -1,9 +1,10 @@
+-NAME=lite
++NAME=litespeedtest
+ BINDIR=bin
+ VERSION=$(shell git describe --tags || echo "unknown version")
+ BUILDTIME=$(shell date -u)
+-GOBUILD=CGO_ENABLED=0 go build -trimpath -ldflags '-X "github.com/xxf098/LiteSpeedTest/constant.Version=$(VERSION)" \
+-		-X "github.com/xxf098/LiteSpeedTest/constant.BuildTime=$(BUILDTIME)" \
++MODULE_PATH=github.com/xxf098/lite-proxy
++GOBUILD=CGO_ENABLED=0 go build -trimpath -ldflags '-X "$(MODULE_PATH)/constant.Version=$(VERSION)" \
++		-X "$(MODULE_PATH)/constant.BuildTime=$(BUILDTIME)" \
+ 		-w -s -buildid='
+ 
+ PLATFORM_LIST = \
+--- /tmp/orig_for_diff/main.go	2026-04-08 03:10:17.863593185 +0000
++++ /tmp/new_for_diff/main.go	2026-04-08 03:10:17.878655777 +0000
+@@ -11,7 +11,7 @@
+ 	conf           = flag.String("config", "", "command line options")
+ 	ping           = flag.Int("ping", 2, "retry times to ping link on startup")
+ 	grpc           = flag.Bool("grpc", false, "start grpc server")
+-	version        = flag.Bool("v", false, "show current version of clash")
++	version        = flag.Bool("v", false, "show LiteSpeedTest version")
+ 	engineName     = flag.String("engine", "", "native | singbox")
+ 	singboxBin     = flag.String("singbox-bin", "sing-box", "path to sing-box binary")
+ 	singboxWorkDir = flag.String("singbox-workdir", ".lite-singbox", "sing-box temp work directory")
