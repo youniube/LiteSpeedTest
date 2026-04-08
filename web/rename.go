@@ -48,8 +48,7 @@ type renameDNSCacheEntry struct {
 }
 
 type renameLookupState struct {
-	dnsBatch     map[string]string
-	dnsBatchSeen map[string]bool
+	dnsBatch map[string]string
 }
 
 type renameLocation struct {
@@ -152,10 +151,7 @@ func smartRenameNodes(ctx context.Context, nodes []renameNode, useExternal bool,
 	totals := map[string]int{}
 	counts := map[string]int{}
 	bases := make([]string, len(nodes))
-	lookupState := &renameLookupState{
-		dnsBatch:     map[string]string{},
-		dnsBatchSeen: map[string]bool{},
-	}
+	lookupState := &renameLookupState{dnsBatch: map[string]string{}}
 
 	for i, node := range nodes {
 		base := buildRenameBase(ctx, node, useExternal, interval, lookupState)
@@ -339,21 +335,50 @@ func lookupGeoLocation(ctx context.Context, server string, interval time.Duratio
 	renameLastExternal = time.Now()
 	renameCacheMu.Unlock()
 
+	info, ok := queryGeoLocationWithRetry(ctx, ip)
+	if !ok {
+		return renameLocation{}
+	}
+
+	renameCacheMu.Lock()
+	renameGeoCache[ip] = renameGeoCacheEntry{Info: info, ExpiresAt: time.Now().Add(12 * time.Hour)}
+	renameCacheMu.Unlock()
+	saveRenameGeoCache()
+	return info
+}
+
+func queryGeoLocationWithRetry(ctx context.Context, ip string) (renameLocation, bool) {
+	info, ok := queryGeoLocationOnce(ctx, ip)
+	if ok {
+		return info, true
+	}
+
+	retryDelay := 2 * time.Second
+	select {
+	case <-ctx.Done():
+		return renameLocation{}, false
+	case <-time.After(retryDelay):
+	}
+
+	return queryGeoLocationOnce(ctx, ip)
+}
+
+func queryGeoLocationOnce(ctx context.Context, ip string) (renameLocation, bool) {
 	lookupCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(lookupCtx, http.MethodGet, fmt.Sprintf("https://ipwho.is/%s", url.PathEscape(ip)), nil)
 	if err != nil {
-		return renameLocation{}
+		return renameLocation{}, false
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return renameLocation{}
+		return renameLocation{}, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return renameLocation{}
+		return renameLocation{}, false
 	}
 
 	var data struct {
@@ -364,10 +389,10 @@ func lookupGeoLocation(ctx context.Context, server string, interval time.Duratio
 		City        string `json:"city"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return renameLocation{}
+		return renameLocation{}, false
 	}
 	if !data.Success {
-		return renameLocation{}
+		return renameLocation{}, false
 	}
 
 	code := strings.ToUpper(strings.TrimSpace(data.CountryCode))
@@ -377,14 +402,9 @@ func lookupGeoLocation(ctx context.Context, server string, interval time.Duratio
 	}
 	info := renameLocation{Code: code, Zh: zh}
 	if info.Code == "" || info.Zh == "" {
-		return renameLocation{}
+		return renameLocation{}, false
 	}
-
-	renameCacheMu.Lock()
-	renameGeoCache[ip] = renameGeoCacheEntry{Info: info, ExpiresAt: time.Now().Add(12 * time.Hour)}
-	renameCacheMu.Unlock()
-	saveRenameGeoCache()
-	return info
+	return info, true
 }
 
 func formatRenameBase(loc renameLocation) string {
@@ -460,8 +480,10 @@ func resolvePublicIP(host string, lookupState *renameLookupState) string {
 		return ""
 	}
 
-	if lookupState != nil && lookupState.dnsBatchSeen[host] {
-		return lookupState.dnsBatch[host]
+	if lookupState != nil {
+		if ip, ok := lookupState.dnsBatch[host]; ok {
+			return ip
+		}
 	}
 
 	renameGeoCacheOnce.Do(loadRenameGeoCache)
@@ -472,8 +494,7 @@ func resolvePublicIP(host string, lookupState *renameLookupState) string {
 		if now.Before(entry.ExpiresAt) {
 			ip := entry.IP
 			renameCacheMu.Unlock()
-			if lookupState != nil {
-				lookupState.dnsBatchSeen[host] = true
+			if lookupState != nil && ip != "" {
 				lookupState.dnsBatch[host] = ip
 			}
 			return ip
@@ -484,10 +505,6 @@ func resolvePublicIP(host string, lookupState *renameLookupState) string {
 
 	ips, err := net.LookupIP(host)
 	if err != nil {
-		if lookupState != nil {
-			lookupState.dnsBatchSeen[host] = true
-			lookupState.dnsBatch[host] = ""
-		}
 		return ""
 	}
 	sort.SliceStable(ips, func(i, j int) bool {
@@ -511,8 +528,7 @@ func resolvePublicIP(host string, lookupState *renameLookupState) string {
 		}
 	}
 
-	if lookupState != nil {
-		lookupState.dnsBatchSeen[host] = true
+	if lookupState != nil && resolved != "" {
 		lookupState.dnsBatch[host] = resolved
 	}
 	if resolved == "" {
