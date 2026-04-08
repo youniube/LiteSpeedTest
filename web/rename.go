@@ -81,27 +81,27 @@ var (
 		{Code: "TW", Zh: "台湾", Keywords: []string{"台湾", "taiwan", "taipei", "tw"}},
 		{Code: "MO", Zh: "澳门", Keywords: []string{"澳门", "macao", "macau", "mo"}},
 		{Code: "SG", Zh: "新加坡", Keywords: []string{"新加坡", "singapore", "sg"}},
-		{Code: "JP", Zh: "日本", Keywords: []string{"日本", "japan", "tokyo", "osaka", "jp"}},
-		{Code: "KR", Zh: "韩国", Keywords: []string{"韩国", "korea", "seoul", "kr"}},
-		{Code: "US", Zh: "美国", Keywords: []string{"美国", "usa", "unitedstates", "united-states", "america", "losangeles", "sanjose", "newyork", "us"}},
-		{Code: "CA", Zh: "加拿大", Keywords: []string{"加拿大", "canada", "toronto", "vancouver", "ca"}},
-		{Code: "GB", Zh: "英国", Keywords: []string{"英国", "uk", "unitedkingdom", "united-kingdom", "england", "london", "gb"}},
-		{Code: "DE", Zh: "德国", Keywords: []string{"德国", "germany", "frankfurt", "de"}},
-		{Code: "FR", Zh: "法国", Keywords: []string{"法国", "france", "paris", "fr"}},
-		{Code: "NL", Zh: "荷兰", Keywords: []string{"荷兰", "netherlands", "amsterdam", "nl"}},
-		{Code: "AU", Zh: "澳大利亚", Keywords: []string{"澳大利亚", "australia", "sydney", "melbourne", "au"}},
-		{Code: "MY", Zh: "马来西亚", Keywords: []string{"马来西亚", "malaysia", "kualalumpur", "my"}},
-		{Code: "TH", Zh: "泰国", Keywords: []string{"泰国", "thailand", "bangkok", "th"}},
-		{Code: "VN", Zh: "越南", Keywords: []string{"越南", "vietnam", "hanoi", "hochiminh", "vn"}},
-		{Code: "PH", Zh: "菲律宾", Keywords: []string{"菲律宾", "philippines", "manila", "ph"}},
-		{Code: "IN", Zh: "印度", Keywords: []string{"印度", "india", "mumbai", "delhi", "in"}},
-		{Code: "RU", Zh: "俄罗斯", Keywords: []string{"俄罗斯", "russia", "moscow", "ru"}},
+		{Code: "JP", Zh: "日本", Keywords: []string{"日本", "东京", "大阪", "japan", "tokyo", "osaka", "jp"}},
+		{Code: "KR", Zh: "韩国", Keywords: []string{"韩国", "首尔", "korea", "seoul", "kr"}},
+		{Code: "US", Zh: "美国", Keywords: []string{"美国", "洛杉矶", "圣何塞", "纽约", "usa", "unitedstates", "united-states", "america", "losangeles", "sanjose", "newyork", "us"}},
+		{Code: "CA", Zh: "加拿大", Keywords: []string{"加拿大", "多伦多", "温哥华", "canada", "toronto", "vancouver", "ca"}},
+		{Code: "GB", Zh: "英国", Keywords: []string{"英国", "伦敦", "uk", "unitedkingdom", "united-kingdom", "england", "london", "gb"}},
+		{Code: "DE", Zh: "德国", Keywords: []string{"德国", "法兰克福", "germany", "frankfurt", "de"}},
+		{Code: "FR", Zh: "法国", Keywords: []string{"法国", "巴黎", "france", "paris", "fr"}},
+		{Code: "NL", Zh: "荷兰", Keywords: []string{"荷兰", "阿姆斯特丹", "netherlands", "amsterdam", "nl"}},
+		{Code: "AU", Zh: "澳大利亚", Keywords: []string{"澳大利亚", "悉尼", "墨尔本", "australia", "sydney", "melbourne", "au"}},
+		{Code: "MY", Zh: "马来西亚", Keywords: []string{"马来西亚", "吉隆坡", "malaysia", "kualalumpur", "my"}},
+		{Code: "TH", Zh: "泰国", Keywords: []string{"泰国", "曼谷", "thailand", "bangkok", "th"}},
+		{Code: "VN", Zh: "越南", Keywords: []string{"越南", "河内", "胡志明", "vietnam", "hanoi", "hochiminh", "vn"}},
+		{Code: "PH", Zh: "菲律宾", Keywords: []string{"菲律宾", "马尼拉", "philippines", "manila", "ph"}},
+		{Code: "IN", Zh: "印度", Keywords: []string{"印度", "孟买", "德里", "india", "mumbai", "delhi", "in"}},
+		{Code: "RU", Zh: "俄罗斯", Keywords: []string{"俄罗斯", "莫斯科", "russia", "moscow", "ru"}},
 		{Code: "TR", Zh: "土耳其", Keywords: []string{"土耳其", "turkey", "istanbul", "tr"}},
 		{Code: "BR", Zh: "巴西", Keywords: []string{"巴西", "brazil", "saopaulo", "br"}},
 		{Code: "AR", Zh: "阿根廷", Keywords: []string{"阿根廷", "argentina", "ar"}},
-		{Code: "AE", Zh: "阿联酋", Keywords: []string{"阿联酋", "uae", "dubai", "emirates", "ae"}},
-		{Code: "ID", Zh: "印度尼西亚", Keywords: []string{"印度尼西亚", "indonesia", "jakarta", "id"}},
-		{Code: "CN", Zh: "中国", Keywords: []string{"中国", "china", "beijing", "shanghai", "guangzhou", "shenzhen", "cn"}},
+		{Code: "AE", Zh: "阿联酋", Keywords: []string{"阿联酋", "迪拜", "uae", "dubai", "emirates", "ae"}},
+		{Code: "ID", Zh: "印度尼西亚", Keywords: []string{"印度尼西亚", "雅加达", "indonesia", "jakarta", "id"}},
+		{Code: "CN", Zh: "中国", Keywords: []string{"中国", "北京", "上海", "广州", "深圳", "china", "beijing", "shanghai", "guangzhou", "shenzhen", "cn"}},
 	}
 
 	renameCodeMap = map[string]string{}
@@ -196,7 +196,28 @@ func buildRenameBase(ctx context.Context, node renameNode, useExternal bool, int
 			return formatRenameBase(loc)
 		}
 	}
+	if fallback := fallbackRemarkBase(remark); fallback != "" {
+		return fallback
+	}
 	return formatRenameBase(renameLocation{Code: "UN", Zh: "未知"})
+}
+
+func fallbackRemarkBase(remark string) string {
+	remark = strings.TrimSpace(strings.ToValidUTF8(remark, ""))
+	if remark == "" {
+		return ""
+	}
+	compact := strings.ToLower(strings.ReplaceAll(remark, " ", ""))
+	blocked := []string{
+		"剩余流量", "流量", "到期", "订阅", "subscription", "traffic", "expire",
+		"used", "total", "balance", "套餐", "官网", "客服", "最新网址",
+	}
+	for _, item := range blocked {
+		if strings.Contains(compact, item) {
+			return ""
+		}
+	}
+	return remark
 }
 
 func inferLocationFromRemark(remark string) renameLocation {
