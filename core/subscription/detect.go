@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	regHasURI = regexp.MustCompile(`(?i)(?:^|\s)(?:vmess|vless|trojan|ssr|ss|http)://`)
-	regQXLine = regexp.MustCompile(`(?im)^\s*(shadowsocks|vmess|trojan|http|socks5)\s*=`)
+	regHasURI          = regexp.MustCompile(`(?i)(?:^|\s)(?:vmess|vless|trojan|ssr|ss|http)://`)
+	regQXLine          = regexp.MustCompile(`(?im)^\s*(shadowsocks|vmess|trojan|http|socks5)\s*=`)
+	regProxyEqualsLine = regexp.MustCompile(`(?im)^\s*[^\n=]+\s*=\s*(ss|ssr|vmess|vless|trojan|http|https|socks5?)\s*,`)
 )
 
 func DetectTextFormat(content string) InputFormat {
@@ -28,10 +29,8 @@ func DetectTextFormat(content string) InputFormat {
 	if strings.Contains(lower, "[remote proxy]") || strings.Contains(lower, "[remote filter]") {
 		return FormatLoon
 	}
-	if strings.Contains(lower, "[proxy]") {
-		if strings.Contains(lower, "transport:") || strings.Contains(lower, "over-tls:") || strings.Contains(lower, "tls-name:") || strings.Contains(lower, "shadowsocks,") || strings.Contains(lower, "shadowsocksr,") {
-			return FormatLoon
-		}
+	if regProxyEqualsLine.MatchString(trimmed) {
+		return FormatLoon
 	}
 	if strings.Contains(lower, "proxies:") || strings.Contains(lower, "proxy-groups:") || strings.Contains(lower, "mixed-port:") || strings.Contains(lower, "allow-lan:") {
 		return FormatClash

@@ -92,7 +92,7 @@ func parseTextContent(content string, hint InputFormat) ([]ProxyNode, InputForma
 		}
 	}
 
-	for _, f := range []InputFormat{FormatURI, FormatBase64, FormatClash, FormatLoon, FormatSurge, FormatQX, FormatSingBox} {
+	for _, f := range []InputFormat{FormatURI, FormatBase64, FormatClash, FormatSurge, FormatLoon, FormatQX, FormatSingBox} {
 		if f == format {
 			continue
 		}
@@ -245,6 +245,9 @@ func parseKeyValueTokens(parts []string) map[string]string {
 			continue
 		}
 		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			kv = strings.SplitN(part, ":", 2)
+		}
 		if len(kv) == 2 {
 			m[strings.ToLower(strings.TrimSpace(kv[0]))] = trimWrapping(kv[1])
 		}
