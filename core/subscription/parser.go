@@ -92,7 +92,7 @@ func parseTextContent(content string, hint InputFormat) ([]ProxyNode, InputForma
 		}
 	}
 
-	for _, f := range []InputFormat{FormatURI, FormatBase64, FormatClash, FormatSurge, FormatLoon, FormatQX, FormatSingBox} {
+	for _, f := range []InputFormat{FormatURI, FormatBase64, FormatClash, FormatLoon, FormatSurge, FormatQX, FormatSingBox} {
 		if f == format {
 			continue
 		}

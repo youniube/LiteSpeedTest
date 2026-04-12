@@ -28,6 +28,11 @@ func DetectTextFormat(content string) InputFormat {
 	if strings.Contains(lower, "[remote proxy]") || strings.Contains(lower, "[remote filter]") {
 		return FormatLoon
 	}
+	if strings.Contains(lower, "[proxy]") {
+		if strings.Contains(lower, "transport:") || strings.Contains(lower, "over-tls:") || strings.Contains(lower, "tls-name:") || strings.Contains(lower, "shadowsocks,") || strings.Contains(lower, "shadowsocksr,") {
+			return FormatLoon
+		}
+	}
 	if strings.Contains(lower, "proxies:") || strings.Contains(lower, "proxy-groups:") || strings.Contains(lower, "mixed-port:") || strings.Contains(lower, "allow-lan:") {
 		return FormatClash
 	}
