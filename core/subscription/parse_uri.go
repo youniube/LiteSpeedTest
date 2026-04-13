@@ -64,6 +64,7 @@ func LinkToNode(link string) (ProxyNode, error) {
 			SkipCertVerify: opt.SkipCertVerify,
 			Network:        opt.Network,
 			SourceFormat:   FormatURI,
+			Raw:            map[string]any{"direct_link": link},
 		}
 		if opt.ServerName != "" {
 			node.SNI = opt.ServerName
@@ -101,6 +102,7 @@ func LinkToNode(link string) (ProxyNode, error) {
 			PublicKey:      opt.PublicKey,
 			ShortID:        opt.ShortID,
 			SourceFormat:   FormatURI,
+			Raw:            map[string]any{"direct_link": link},
 		}, nil
 	case strings.HasPrefix(lower, "trojan://"):
 		opt, err := config.TrojanLinkToTrojanOption(link)
@@ -119,6 +121,7 @@ func LinkToNode(link string) (ProxyNode, error) {
 			SkipCertVerify: opt.SkipCertVerify,
 			Network:        opt.Network,
 			SourceFormat:   FormatURI,
+			Raw:            map[string]any{"direct_link": link},
 		}
 		if opt.WSOpts.Path != "" {
 			node.Path = opt.WSOpts.Path
@@ -149,6 +152,7 @@ func LinkToNode(link string) (ProxyNode, error) {
 			ObfsParam:    opt.ObfsParam,
 			ProtoParam:   opt.ProtocolParam,
 			SourceFormat: FormatURI,
+			Raw:          map[string]any{"direct_link": link},
 		}, nil
 	case strings.HasPrefix(lower, "ss://"):
 		opt, err := config.SSLinkToSSOption(link)
@@ -165,6 +169,7 @@ func LinkToNode(link string) (ProxyNode, error) {
 			Plugin:       opt.Plugin,
 			PluginOpts:   opt.PluginOpts,
 			SourceFormat: FormatURI,
+			Raw:          map[string]any{"direct_link": link},
 		}, nil
 	case strings.HasPrefix(lower, "http://"):
 		opt, err := config.HttpLinkToHttpOption(link)
@@ -182,6 +187,7 @@ func LinkToNode(link string) (ProxyNode, error) {
 			SNI:            opt.SNI,
 			SkipCertVerify: opt.SkipCertVerify,
 			SourceFormat:   FormatURI,
+			Raw:            map[string]any{"direct_link": link},
 		}, nil
 	default:
 		return ProxyNode{}, ErrUnsupportedNodeType

@@ -60,6 +60,10 @@ func ParseClashMapping(mapping map[string]any) (ProxyNode, error) {
 	node.Type = proxyType
 	node.SourceFormat = FormatClash
 	node.Raw = cloneMap(mapping)
+	if node.Raw == nil {
+		node.Raw = map[string]any{}
+	}
+	node.Raw["direct_link"] = link
 	if proxyType == "vmess" {
 		if node.Host == "" {
 			if wsHeaders := getMap(mapping, "ws-headers"); len(wsHeaders) > 0 {

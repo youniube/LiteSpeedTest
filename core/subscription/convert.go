@@ -2,6 +2,10 @@ package subscription
 
 import (
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/xxf098/lite-proxy/config"
 )
@@ -29,11 +33,166 @@ func ConvertNodeToLink(node ProxyNode) (string, error) {
 		return "", ErrNoProxyFound
 	}
 	node = normalized[0]
+	if link, ok := directLinkFromRaw(node); ok && strings.TrimSpace(link) != "" {
+		return link, nil
+	}
+	if link, err := buildDirectLink(node); err == nil && link != "" {
+		return link, nil
+	}
 	mapping := NodeToProxyMapping(node)
 	if mapping == nil {
 		return "", ErrUnsupportedNodeType
 	}
 	return config.ParseProxy(mapping, "")
+}
+
+func directLinkFromRaw(node ProxyNode) (string, bool) {
+	if len(node.Raw) == 0 {
+		return "", false
+	}
+	if link, ok := node.Raw["direct_link"].(string); ok && strings.TrimSpace(link) != "" {
+		return link, true
+	}
+	if link, ok := node.Raw["link"].(string); ok && strings.TrimSpace(link) != "" {
+		return link, true
+	}
+	return "", false
+}
+
+func buildDirectLink(node ProxyNode) (string, error) {
+	switch normalizeProxyType(node.Type) {
+	case "trojan":
+		return buildTrojanLink(node)
+	case "ss":
+		return buildShadowsocksLink(node)
+	case "http":
+		return buildHttpLink(node)
+	case "vless":
+		return buildVlessLink(node)
+	default:
+		return "", ErrUnsupportedNodeType
+	}
+}
+
+func buildTrojanLink(node ProxyNode) (string, error) {
+	if node.Server == "" || node.Port <= 0 || node.Password == "" {
+		return "", ErrInvalidSubscription
+	}
+	u := &url.URL{
+		Scheme:   "trojan",
+		User:     url.User(node.Password),
+		Host:     net.JoinHostPort(node.Server, strconv.Itoa(node.Port)),
+		Fragment: node.Name,
+	}
+	q := url.Values{}
+	q.Set("security", "tls")
+	if node.SkipCertVerify {
+		q.Set("allowInsecure", "1")
+	}
+	if sni := strings.TrimSpace(node.SNI); sni != "" {
+		q.Set("sni", sni)
+	}
+	switch node.Network {
+	case "ws":
+		q.Set("type", "ws")
+		if path := firstNotEmpty(node.Path, "/"); path != "" {
+			q.Set("path", path)
+		}
+		if host := strings.TrimSpace(node.Host); host != "" {
+			q.Set("host", host)
+		}
+	case "grpc":
+		q.Set("type", "grpc")
+		if svc := strings.TrimSpace(node.ServiceName); svc != "" {
+			q.Set("serviceName", svc)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func buildShadowsocksLink(node ProxyNode) (string, error) {
+	method := firstNotEmpty(node.Method, node.Cipher)
+	if node.Server == "" || node.Port <= 0 || method == "" || node.Password == "" {
+		return "", ErrInvalidSubscription
+	}
+	if strings.HasPrefix(strings.ToLower(method), "2022-") {
+		return "", ErrUnsupportedNodeType
+	}
+	u := &url.URL{
+		Scheme:   "ss",
+		User:     url.UserPassword(method, node.Password),
+		Host:     net.JoinHostPort(node.Server, strconv.Itoa(node.Port)),
+		Fragment: node.Name,
+	}
+	if node.Plugin != "" {
+		plugin := node.Plugin
+		if len(node.PluginOpts) > 0 {
+			parts := make([]string, 0, len(node.PluginOpts)+1)
+			parts = append(parts, plugin)
+			for k, v := range node.PluginOpts {
+				if fmt.Sprintf("%v", v) == "" {
+					continue
+				}
+				parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+			}
+			plugin = strings.Join(parts, ";")
+		}
+		q := url.Values{}
+		q.Set("plugin", plugin)
+		u.RawQuery = q.Encode()
+	}
+	return u.String(), nil
+}
+
+func buildHttpLink(node ProxyNode) (string, error) {
+	if node.Server == "" || node.Port <= 0 {
+		return "", ErrInvalidSubscription
+	}
+	u := &url.URL{
+		Scheme:   "http",
+		User:     url.User(node.Password),
+		Host:     net.JoinHostPort(node.Server, strconv.Itoa(node.Port)),
+		Fragment: node.Name,
+	}
+	q := url.Values{}
+	q.Set("tls", strconv.FormatBool(node.TLS))
+	if node.Username != "" {
+		q.Set("username", node.Username)
+	}
+	if node.SkipCertVerify {
+		q.Set("allowInsecure", "1")
+	}
+	if node.SNI != "" {
+		q.Set("sni", node.SNI)
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func buildVlessLink(node ProxyNode) (string, error) {
+	opt := &config.VlessOption{
+		Name:           node.Name,
+		Server:         node.Server,
+		Port:           node.Port,
+		UUID:           node.UUID,
+		TLS:            node.TLS,
+		SNI:            node.SNI,
+		ServerName:     node.SNI,
+		SkipCertVerify: node.SkipCertVerify,
+		Network:        node.Network,
+		Flow:           node.Flow,
+		Fingerprint:    node.Fingerprint,
+		Host:           node.Host,
+		Path:           node.Path,
+		ServiceName:    node.ServiceName,
+		PublicKey:      node.PublicKey,
+		ShortID:        node.ShortID,
+	}
+	if node.SkipCertVerify {
+		opt.Insecure = true
+	}
+	return config.VlessOptionToLink(opt, "")
 }
 
 func NodeToProxyMapping(node ProxyNode) map[string]any {
