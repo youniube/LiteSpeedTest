@@ -37,7 +37,12 @@ func NeedExternalEngine(engineName, link string) bool {
 	if engineName == "native" {
 		return false
 	}
-	return SupportsSingbox(link)
+	if engineName == "singbox" {
+		return SupportsSingbox(link)
+	}
+	// auto mode: only VLESS uses sing-box by default, matching the GUI description
+	link = strings.ToLower(strings.TrimSpace(link))
+	return strings.HasPrefix(link, "vless://")
 }
 
 func SupportsSingbox(link string) bool {

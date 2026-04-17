@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/xxf098/lite-proxy/config"
-	"github.com/xxf098/lite-proxy/core/subscription"
 	"github.com/xxf098/lite-proxy/download"
 	"github.com/xxf098/lite-proxy/engine"
 	"github.com/xxf098/lite-proxy/engine/singbox"
@@ -62,16 +61,16 @@ const (
 // profiles filter
 // clash to vmess local subscription
 func getSubscriptionLinks(link string) ([]string, error) {
-	c := http.Client{Timeout: 20 * time.Second}
+	c := http.Client{
+		Timeout: 20 * time.Second,
+	}
 	resp, err := c.Get(link)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if isYamlFile(link) {
-		if links, err := scanClashProxies(resp.Body, true); err == nil && len(links) > 0 {
-			return links, nil
-		}
+		return scanClashProxies(resp.Body, true)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -79,25 +78,22 @@ func getSubscriptionLinks(link string) ([]string, error) {
 	}
 	dataStr := string(data)
 	msg, err := utils.DecodeB64(dataStr)
-	if err == nil {
-		if links, err := ParseLinks(msg); err == nil && len(links) > 0 {
+	if err != nil {
+		if strings.Contains(dataStr, "proxies:") {
+			return parseClash(dataStr)
+		} else if strings.Contains(dataStr, "vmess://") ||
+			strings.Contains(dataStr, "trojan://") ||
+			strings.Contains(dataStr, "ssr://") ||
+			strings.Contains(dataStr, "ss://") ||
+			strings.Contains(dataStr, "vless://") {
+			return parseProfiles(dataStr)
+		}
+		if links, exErr := parseExtraContent(dataStr); exErr == nil && len(links) > 0 {
 			return links, nil
 		}
+		return []string{}, err
 	}
-	if strings.Contains(dataStr, "proxies:") {
-		if links, err := parseClash(dataStr); err == nil && len(links) > 0 {
-			return links, nil
-		}
-	}
-	if strings.Contains(dataStr, "vmess://") || strings.Contains(dataStr, "trojan://") || strings.Contains(dataStr, "ssr://") || strings.Contains(dataStr, "ss://") || strings.Contains(dataStr, "vless://") {
-		if links, err := parseProfiles(dataStr); err == nil && len(links) > 0 {
-			return links, nil
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	links, _, err := subscription.ParseToLinks(ctx, link)
-	return links, err
+	return ParseLinks(msg)
 }
 
 type parseFunc func(string) ([]string, error)
@@ -114,46 +110,37 @@ func ParseLinks(message string) ([]string, error) {
 
 // api
 func ParseLinksWithOption(message string, opt ParseOption) ([]string, error) {
+	// matched, err := regexp.MatchString(`^(?:https?:\/\/)(?:[^@\/\n]+@)?(?:www\.)?([^:\/\n]+)`, message)
 	if opt.Type == PARSE_URL || utils.IsUrl(message) {
 		log.Println(message)
 		return getSubscriptionLinks(message)
 	}
+	// check is file path
 	if opt.Type == PARSE_FILE || utils.IsFilePath(message) {
 		return parseFile(message)
 	}
 	if opt.Type == PARSE_BASE64 {
-		if links, err := parseBase64(message); err == nil && len(links) > 0 {
-			return links, nil
-		}
-		return subscription.ParseTextToLinks(message, subscription.FormatBase64)
+		return parseBase64(message)
 	}
 	if opt.Type == PARSE_CLASH {
-		if links, err := parseClash(message); err == nil && len(links) > 0 {
-			return links, nil
-		}
-		return subscription.ParseTextToLinks(message, subscription.FormatClash)
+		return parseClash(message)
 	}
 	if opt.Type == PARSE_PROFILE {
-		if links, err := parseProfiles(message); err == nil && len(links) > 0 {
-			return links, nil
-		}
-		return subscription.ParseTextToLinks(message, subscription.FormatURI)
+		return parseProfiles(message)
 	}
 	var links []string
 	var err error
-	for _, fn := range []parseFunc{parseProfiles, parseBase64, parseClash, parseFile} {
+	for _, fn := range []parseFunc{parseProfiles, parseBase64, parseClash, parseExtraContent, parseFile} {
 		links, err = fn(message)
 		if err == nil && len(links) > 0 {
-			return links, nil
+			break
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	links, _, err = subscription.ParseToLinks(ctx, message)
 	return links, err
 }
 
 func parseProfiles(data string) ([]string, error) {
+	// encodeed url
 	links := strings.Split(data, "\n")
 	if len(links) > 1 {
 		for i, link := range links {
@@ -165,6 +152,7 @@ func parseProfiles(data string) ([]string, error) {
 		}
 		data = strings.Join(links, "\n")
 	}
+	// reg := regexp.MustCompile(`((?i)vmess://(\S+?)@(\S+?):([0-9]{2,5})/([?#][^\s]+))|((?i)vmess://[a-zA-Z0-9+_/=-]+([?#][^\s]+)?)|((?i)ssr://[a-zA-Z0-9+_/=-]+)|((?i)(vless|ss|trojan)://(\S+?)@(\S+?):([0-9]{2,5})([?#][^\s]+))|((?i)(ss)://[a-zA-Z0-9+_/=-]+([?#][^\s]+))`)
 	matches := regProfile.FindAllStringSubmatch(data, -1)
 	linksLen, matchesLen := len(links), len(matches)
 	if linksLen < matchesLen {
@@ -181,32 +169,23 @@ func parseProfiles(data string) ([]string, error) {
 		}
 		links[index] = link
 	}
-	if len(links) > 0 {
-		return links, nil
-	}
-	return subscription.ParseTextToLinks(data, subscription.FormatURI)
+	return links, nil
 }
 
 func parseBase64(data string) ([]string, error) {
 	msg, err := utils.DecodeB64(data)
 	if err != nil {
-		return subscription.ParseTextToLinks(data, subscription.FormatBase64)
+		return nil, err
 	}
-	if links, err := parseProfiles(msg); err == nil && len(links) > 0 {
-		return links, nil
-	}
-	return subscription.ParseTextToLinks(data, subscription.FormatBase64)
+	return parseProfiles(msg)
 }
 
 func parseClash(data string) ([]string, error) {
 	cc, err := config.ParseClash(utils.UnsafeGetBytes(data))
-	if err == nil && len(cc.Proxies) > 0 {
-		return cc.Proxies, nil
+	if err != nil {
+		return parseClashProxies(data)
 	}
-	if links, err2 := parseClashProxies(data); err2 == nil && len(links) > 0 {
-		return links, nil
-	}
-	return subscription.ParseTextToLinks(data, subscription.FormatClash)
+	return cc.Proxies, nil
 }
 
 // split to new line
@@ -264,39 +243,39 @@ func parseClashByte(data []byte) ([]string, error) {
 func parseFile(filepath string) ([]string, error) {
 	filepath = strings.TrimSpace(filepath)
 	if _, err := os.Stat(filepath); err != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		links, _, err2 := subscription.ParseToLinks(ctx, filepath)
-		return links, err2
+		return nil, err
 	}
+	// clash
 	if isYamlFile(filepath) {
-		if links, err := parseClashFileByLine(filepath); err == nil && len(links) > 0 {
-			return links, nil
-		}
+		return parseClashFileByLine(filepath)
 	}
 	data, err := ioutil.ReadFile(filepath)
 	if err != nil {
 		return nil, err
 	}
-	if links, err := parseBase64(string(data)); err == nil && len(links) > 0 {
+
+	text := string(data)
+	links, err := parseBase64(text)
+	if err == nil && len(links) > 0 {
 		return links, nil
 	}
-	if len(data) > 2048 {
-		preview := string(data[:2048])
-		if strings.Contains(preview, "proxies:") {
-			if links, err := scanClashProxies(bytes.NewReader(data), true); err == nil && len(links) > 0 {
-				return links, nil
-			}
-		}
-		if strings.Contains(preview, "vmess://") || strings.Contains(preview, "trojan://") || strings.Contains(preview, "ssr://") || strings.Contains(preview, "ss://") || strings.Contains(preview, "vless://") {
-			if links, err := parseProfiles(string(data)); err == nil && len(links) > 0 {
-				return links, nil
-			}
-		}
+	preview := text
+	if len(preview) > 4096 {
+		preview = preview[:4096]
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	links, _, err := subscription.ParseToLinks(ctx, filepath)
+	if strings.Contains(preview, "proxies:") {
+		return scanClashProxies(bytes.NewReader(data), true)
+	}
+	if strings.Contains(preview, "vmess://") ||
+		strings.Contains(preview, "trojan://") ||
+		strings.Contains(preview, "ssr://") ||
+		strings.Contains(preview, "ss://") ||
+		strings.Contains(preview, "vless://") {
+		return parseProfiles(text)
+	}
+	if links, exErr := parseExtraContent(text); exErr == nil && len(links) > 0 {
+		return links, nil
+	}
 	return links, err
 }
 
