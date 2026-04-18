@@ -5,11 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
+	"sync"
 
 	"github.com/xxf098/lite-proxy/config"
 	"github.com/xxf098/lite-proxy/utils"
@@ -26,12 +25,27 @@ type getSubscriptionLinkResponse struct {
 }
 
 type subscriptionEntry struct {
-	FilePath string
-	Group    string
-	Links    []string
+	Group string
+	Links []string
 }
 
-var subscriptionLinkMap = map[string]subscriptionEntry{}
+var (
+	subscriptionLinkMu  sync.RWMutex
+	subscriptionLinkMap = map[string]subscriptionEntry{}
+)
+
+func saveSubscriptionEntry(key string, entry subscriptionEntry) {
+	subscriptionLinkMu.Lock()
+	defer subscriptionLinkMu.Unlock()
+	subscriptionLinkMap[key] = entry
+}
+
+func getSubscriptionEntry(key string) (subscriptionEntry, bool) {
+	subscriptionLinkMu.RLock()
+	defer subscriptionLinkMu.RUnlock()
+	entry, ok := subscriptionLinkMap[key]
+	return entry, ok
+}
 
 func buildSubscriptionLink(r *http.Request, key string, group string) string {
 	scheme := forwardedScheme(r)
@@ -67,45 +81,50 @@ func getSubscriptionLink(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
+	defer r.Body.Close()
 
 	body := GetSubscriptionLink{}
-	if r.Body == nil {
-		writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
-		return
-	}
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
-		return
-	}
-	if err = json.Unmarshal(data, &body); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(body.Group) == 0 {
+	group := strings.TrimSpace(body.Group)
+	if group == "" {
 		writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
 		return
 	}
-	for _, link := range body.Links {
-		if strings.TrimSpace(link) != "" {
-			goto payloadReady
+
+	links := sanitizeLinks(body.Links)
+	filePath := strings.TrimSpace(body.FilePath)
+	if len(links) == 0 {
+		if filePath == "" {
+			writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
+			return
 		}
+		if !utils.IsUrl(filePath) {
+			writeAPIError(w, http.StatusBadRequest, "local file path is not allowed")
+			return
+		}
+		var err error
+		links, err = getSubscriptionLinks(filePath)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		links = sanitizeLinks(links)
 	}
-	if len(strings.TrimSpace(body.FilePath)) == 0 {
-		writeAPIError(w, http.StatusBadRequest, "Invalid Parameter")
+	if len(links) == 0 {
+		writeAPIError(w, http.StatusBadRequest, "No links found")
 		return
 	}
 
-payloadReady:
-
-	payloadKey := body.FilePath + "\n" + body.Group + "\n" + strings.Join(body.Links, "\n")
+	payloadKey := filePath + "\n" + group + "\n" + strings.Join(links, "\n")
 	md5Hash := fmt.Sprintf("%x", md5.Sum([]byte(payloadKey)))
-	subscriptionLinkMap[md5Hash] = subscriptionEntry{
-		FilePath: strings.TrimSpace(body.FilePath),
-		Group:    strings.TrimSpace(body.Group),
-		Links:    sanitizeLinks(body.Links),
-	}
-	subscriptionLink := buildSubscriptionLink(r, md5Hash, body.Group)
+	saveSubscriptionEntry(md5Hash, subscriptionEntry{
+		Group: group,
+		Links: links,
+	})
+	subscriptionLink := buildSubscriptionLink(r, md5Hash, group)
 	writeJSON(w, http.StatusOK, getSubscriptionLinkResponse{Link: subscriptionLink})
 }
 
@@ -136,62 +155,17 @@ func getSubscription(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Key not found", http.StatusBadRequest)
 		return
 	}
-	sub := queries.Get("sub")
-	entry, ok := subscriptionLinkMap[key]
+	entry, ok := getSubscriptionEntry(key)
 	if !ok {
 		http.Error(w, "Wrong key", http.StatusBadRequest)
 		return
 	}
-	if len(entry.Links) > 0 {
-		payload := encodeLinksSubscription(entry.Links)
-		if payload == "" {
-			http.Error(w, "No links found", http.StatusBadRequest)
-			return
-		}
-		writePlainText(w, http.StatusOK, payload)
+	payload := encodeLinksSubscription(entry.Links)
+	if payload == "" {
+		http.Error(w, "No links found", http.StatusBadRequest)
 		return
 	}
-	filePath := entry.FilePath
-
-	if isYamlFile(filePath) && utils.IsUrl(filePath) {
-		links, err := getSubscriptionLinks(filePath)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		b64Data := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
-		writePlainText(w, http.StatusOK, b64Data)
-		return
-	}
-
-	if isYamlFile(filePath) {
-		data, err := writeClash(filePath)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writePlainText(w, http.StatusOK, string(data))
-		return
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if len(data) > 128 && strings.Contains(string(data[:128]), "proxies:") {
-		if dataClash, err := writeClash(filePath); err == nil && len(dataClash) > 0 {
-			data = dataClash
-		}
-	}
-	if sub == "v2ray" {
-		if dataShadowrocket, err := writeShadowrocket(data); err == nil && len(dataShadowrocket) > 0 {
-			data = dataShadowrocket
-		}
-	}
-
-	writePlainText(w, http.StatusOK, string(data))
+	writePlainText(w, http.StatusOK, payload)
 }
 
 func writeClash(filePath string) ([]byte, error) {

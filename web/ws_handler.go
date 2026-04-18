@@ -5,12 +5,25 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 	"github.com/xxf098/lite-proxy/config"
 )
 
 var upgrader = websocket.Upgrader{}
+
+type safeWSWriter struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
+func (w *safeWSWriter) WriteMessage(messageType int, data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.conn.WriteMessage(messageType, data)
+}
 
 func updateTest(w http.ResponseWriter, r *http.Request) {
 	c, err := upgrader.Upgrade(w, r, nil)
@@ -23,6 +36,9 @@ func updateTest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	writer := &safeWSWriter{conn: c}
+	var running atomic.Bool
+
 	for {
 		mt, message, err := c.ReadMessage()
 		if err != nil {
@@ -30,10 +46,15 @@ func updateTest(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
+		if !running.CompareAndSwap(false, true) {
+			_ = writer.WriteMessage(mt, []byte(`{"info": "error", "reason": "busy"}`))
+			continue
+		}
+
 		links, options, err := parseMessage(message)
 		if err != nil {
-			msg := `{"info": "error", "reason": "invalidsub"}`
-			c.WriteMessage(mt, []byte(msg))
+			_ = writer.WriteMessage(mt, []byte(`{"info": "error", "reason": "invalidsub"}`))
+			running.Store(false)
 			continue
 		}
 
@@ -42,12 +63,15 @@ func updateTest(w http.ResponseWriter, r *http.Request) {
 		}
 
 		p := ProfileTest{
-			Writer:      c,
+			Writer:      writer,
 			MessageType: mt,
 			Links:       links,
 			Options:     options,
 		}
-		go p.testAll(ctx)
+		go func() {
+			defer running.Store(false)
+			_, _ = p.testAll(ctx)
+		}()
 	}
 }
 

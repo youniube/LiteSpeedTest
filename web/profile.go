@@ -363,8 +363,8 @@ func parseMessage(message []byte) ([]string, *ProfileTestOptions, error) {
 	if options.GroupName == "?empty?" || options.GroupName == "" {
 		options.GroupName = "Default"
 	}
-	if options.Timeout < 8 {
-		options.Timeout = 8
+	if options.Timeout < 8*time.Second {
+		options.Timeout = 8 * time.Second
 	}
 	if options.Concurrency < 1 {
 		options.Concurrency = 1
@@ -394,8 +394,8 @@ func parseRetestMessage(message []byte) ([]string, *ProfileTestOptions, error) {
 	if options.GroupName == "?empty?" || options.GroupName == "" {
 		options.GroupName = "Default"
 	}
-	if options.Timeout < 20 {
-		options.Timeout = 20
+	if options.Timeout < 20*time.Second {
+		options.Timeout = 20 * time.Second
 	}
 	if options.Concurrency < 1 {
 		options.Concurrency = 1
